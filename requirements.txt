@@ -1,6 +1,0 @@
-requests
-Pillow
-numpy
-torch
-pydantic
-# Add other specific versions if necessary, e.g., torch>=1.9.0

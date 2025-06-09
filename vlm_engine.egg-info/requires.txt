@@ -1,0 +1,7 @@
+pydantic
+numpy
+torch
+torchvision
+aiohttp
+pyyaml
+opencv-python

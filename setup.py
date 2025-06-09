@@ -1,26 +1,32 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="haven-vlm-engine",
+    name="vlm_engine",
     version="0.1.0",
+    description="Advanced Vision-Language Model Engine for content tagging",
+    long_description=open("README.md").read(),
+    long_description_content_type="text/markdown",
+    author="HAVEN Network",
+    author_email="officialhavennetwork@gmail.com",
+    url="https://github.com/Haven-hvn/haven-vlm-engine-package",
     packages=find_packages(),
     install_requires=[
-        "requests",
-        "Pillow",
+        "pydantic",
         "numpy",
         "torch",
-        "pydantic"
+        "torchvision",
+        "aiohttp",
+        "pyyaml",
+        "opencv-python"
     ],
-    author="Haven VLM Engine Team",
-    author_email="contact@example.com",
-    description="A reusable package for VLM data pipelines and complex processing.",
-    long_description=open('README.md').read(),
-    long_description_content_type='text/markdown',
-    url="https://github.com/example/haven-vlm-engine-package", # Replace with actual URL
     classifiers=[
+        "Development Status :: 3 - Alpha",
+        "Intended Audience :: Developers",
+        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License", # Choose appropriate license
-        "Operating System :: OS Independent",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
     ],
-    python_requires='>=3.8',
+    python_requires=">=3.8",
 )
