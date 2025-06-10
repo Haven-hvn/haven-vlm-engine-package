@@ -5,3 +5,5 @@ torchvision
 aiohttp
 pyyaml
 opencv-python
+decord
+requests

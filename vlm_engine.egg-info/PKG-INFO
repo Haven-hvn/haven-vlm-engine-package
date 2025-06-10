@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: vlm_engine
-Version: 0.1.0
+Version: 0.1.1
 Summary: Advanced Vision-Language Model Engine for content tagging
 Home-page: https://github.com/Haven-hvn/haven-vlm-engine-package
 Author: HAVEN Network
@@ -21,6 +21,8 @@ Requires-Dist: torchvision
 Requires-Dist: aiohttp
 Requires-Dist: pyyaml
 Requires-Dist: opencv-python
+Requires-Dist: decord
+Requires-Dist: requests
 Dynamic: author
 Dynamic: author-email
 Dynamic: classifier
