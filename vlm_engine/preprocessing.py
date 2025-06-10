@@ -119,7 +119,10 @@ def preprocess_video(video_path: str, frame_interval_sec: float = 0.5, img_size:
                 except RuntimeError as e_read_frame:
                     logger.warning(f"Could not read frame {i} from {video_path}: {e_read_frame}")
                     continue
-                
+                # Convert decord NDArray to PyTorch tensor if needed
+                if not isinstance(frame_cpu, torch.Tensor):
+                    frame_cpu = torch.from_numpy(frame_cpu.asnumpy())
+                    
                 frame_cpu = crop_black_bars_lr(frame_cpu)
                 frame = frame_cpu.to(actual_device)
                 
