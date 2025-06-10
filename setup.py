@@ -18,7 +18,8 @@ setup(
         "aiohttp",
         "pyyaml",
         "opencv-python",
-        "decord"
+        "decord",
+        "requests"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
