@@ -17,7 +17,8 @@ setup(
         "torchvision",
         "aiohttp",
         "pyyaml",
-        "opencv-python"
+        "opencv-python",
+        "decord"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
