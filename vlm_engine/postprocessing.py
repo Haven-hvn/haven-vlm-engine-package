@@ -123,7 +123,7 @@ class TimeFrame(BaseModel):
 
 class VideoTagInfo(BaseModel):
     video_duration: float
-    video_tags: Dict[str, Set[str]]
+    video_tags: Dict[str, List[str]]
     tag_totals: Dict[str, Dict[str, float]]
     tag_timespans: Dict[str, Dict[str, List[TimeFrame]]]
 
@@ -220,15 +220,15 @@ def compute_video_timespans(video_result: AIVideoResult, category_config: Dict) 
                 toReturn[category][renamed_tag] = final_tag_timeframes
     return toReturn
 
-def compute_video_tags(video_result: AIVideoResult, category_config: Dict) -> Tuple[Dict[str, Set[str]], Dict[str, Dict[str, float]]]:
-    video_tags: Dict[str, Set[str]] = {}
+def compute_video_tags(video_result: AIVideoResult, category_config: Dict) -> Tuple[Dict[str, List[str]], Dict[str, Dict[str, float]]]:
+    video_tags: Dict[str, List[str]] = {}
     tag_totals: Dict[str, Dict[str, float]] = {}
     video_duration: float = video_result.metadata.duration
     
     for category, tag_raw_timespans_map in video_result.timespans.items():
         if category not in category_config:
             continue
-        video_tags[category] = set()
+        video_tags[category] = []
         tag_totals[category] = {}
         
         frame_interval: float = 0.5
@@ -254,7 +254,9 @@ def compute_video_tags(video_result: AIVideoResult, category_config: Dict) -> Tu
             renamed_tag: str = category_config[category][tag]['RenamedTag']
             tag_totals[category][renamed_tag] = totalDuration
             if required_duration > 0 and totalDuration >= required_duration:
-                video_tags[category].add(renamed_tag)
+                # Use list instead of set, and avoid duplicates
+                if renamed_tag not in video_tags[category]:
+                    video_tags[category].append(renamed_tag)
     return video_tags, tag_totals
 
 def format_duration_or_percent(value: Union[str, float, int], video_duration: float) -> float:
