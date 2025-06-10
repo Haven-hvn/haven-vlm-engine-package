@@ -2,9 +2,9 @@ Metadata-Version: 2.4
 Name: vlm_engine
 Version: 0.1.0
 Summary: Advanced Vision-Language Model Engine for content tagging
-Home-page: https://github.com/yourusername/vlm_engine
-Author: Your Name
-Author-email: your.email@example.com
+Home-page: https://github.com/Haven-hvn/haven-vlm-engine-package
+Author: HAVEN Network
+Author-email: officialhavennetwork@gmail.com
 Classifier: Development Status :: 3 - Alpha
 Classifier: Intended Audience :: Developers
 Classifier: License :: OSI Approved :: MIT License
@@ -53,8 +53,8 @@ pip install vlm-engine
 
 ### From Source
 ```bash
-git clone https://github.com/yourusername/vlm-engine.git
-cd vlm-engine
+git clone https://github.com/Haven-hvn/haven-vlm-engine-package.git
+cd vlm-engine-package
 pip install -e .
 ```
 
