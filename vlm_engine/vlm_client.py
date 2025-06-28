@@ -79,7 +79,7 @@ class OpenAICompatibleVLMClient:
         img_str: str = base64.b64encode(buffered.getvalue()).decode('utf-8')
         return f"data:image/{format.lower()};base64,{img_str}"
 
-    def analyze_frame(self, frame: Optional[Image.Image]) -> Dict[str, float]:
+    async def analyze_frame(self, frame: Optional[Image.Image]) -> Dict[str, float]:
         tag: str
         if not frame:
             self.logger.warning("Analyze_frame called with no frame.")

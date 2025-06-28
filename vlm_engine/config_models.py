@@ -25,6 +25,9 @@ class ModelConfig(BaseModel):
     normalization_config: Union[int, Dict[str, List[float]]] = 1
     model_file_name: Optional[str] = None
     model_license_name: Optional[str] = None
+    # Multiplexer configuration for multiple endpoints
+    multiplexer_endpoints: Optional[List[Dict[str, Any]]] = None
+    use_multiplexer: bool = False
 
 class PipelineModelConfig(BaseModel):
     name: str

@@ -68,6 +68,49 @@ async def main():
 asyncio.run(main())
 ```
 
+### Multiplexer Configuration (Load Balancing)
+
+For high-performance deployments, you can configure multiple VLM endpoints with automatic load balancing:
+
+```python
+from vlm_engine.config_models import EngineConfig, ModelConfig
+
+config = EngineConfig(
+    active_ai_models=["vlm_multiplexer_model"],
+    models={
+        "vlm_multiplexer_model": ModelConfig(
+            type="vlm_model",
+            model_id="HuggingFaceTB/SmolVLM-Instruct",
+            use_multiplexer=True,  # Enable multiplexer mode
+            multiplexer_endpoints=[
+                {
+                    "base_url": "http://server1:7045/v1",
+                    "api_key": "",
+                    "name": "primary-server",
+                    "weight": 5,  # Higher weight = more requests
+                    "is_fallback": False
+                },
+                {
+                    "base_url": "http://server2:7045/v1",
+                    "api_key": "",
+                    "name": "secondary-server",
+                    "weight": 3,
+                    "is_fallback": False
+                },
+                {
+                    "base_url": "http://backup:7045/v1",
+                    "api_key": "",
+                    "name": "backup-server",
+                    "weight": 1,
+                    "is_fallback": True  # Used only when primaries fail
+                }
+            ],
+            tag_list=["tag1", "tag2", "tag3"]
+        )
+    }
+)
+```
+
 ## Architecture
 
 ### Core Components
@@ -76,8 +119,10 @@ asyncio.run(main())
    - Manages model initialization and pipeline execution
    - Handles asynchronous processing of videos and images
 
-2. **VLMClient**: OpenAI-compatible API client
+2. **VLMClient**: OpenAI-compatible API client with multiplexer support
    - Supports any VLM with chat completions endpoint
+   - Load balancing across multiple endpoints using multiplexer-llm
+   - Automatic failover for high availability
    - Includes retry logic with exponential backoff and jitter
    - Handles image encoding and prompt formatting
 
@@ -121,6 +166,14 @@ config = EngineConfig(
 )
 ```
 
+#### Multiplexer Benefits
+
+- **Load Balancing**: Distribute requests across multiple VLM endpoints based on configurable weights
+- **High Availability**: Automatic failover to backup endpoints when primary endpoints fail
+- **Improved Performance**: Parallel processing across multiple servers for higher throughput
+- **Seamless Integration**: Drop-in replacement for single endpoint configurations
+- **Flexible Configuration**: Mix of primary and fallback endpoints with custom weights
+
 ### Advanced Configuration
 
 The package supports complex configurations including:
@@ -130,6 +183,8 @@ The package supports complex configurations including:
 - Batch processing configurations
 
 See the [examples](examples/) directory for detailed configuration examples.
+
+For comprehensive multiplexer setup and configuration, see [MULTIPLEXER_INTEGRATION.md](MULTIPLEXER_INTEGRATION.md).
 
 ## API Reference
 
