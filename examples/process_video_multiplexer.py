@@ -43,8 +43,11 @@ async def main():
                 model_id="HuggingFaceTB/SmolVLM-Instruct",
                 model_identifier=93848,
                 model_version="1.0",
-                # Enable multiplexer mode
+                # Enable multiplexer mode with performance optimizations
                 use_multiplexer=True,
+                # Performance optimization settings
+                max_concurrent_requests=30,  # Higher concurrency for better throughput
+                connection_pool_size=100,    # Larger connection pool for multiple endpoints
                 # Configure multiple endpoints for load balancing
                 multiplexer_endpoints=[
                     {
