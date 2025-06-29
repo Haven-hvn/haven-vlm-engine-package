@@ -4,6 +4,7 @@ from PIL import Image
 from .preprocessing import get_video_duration_decord
 from .postprocessing import AIVideoResult, compute_video_tag_info
 from .vlm_client import OpenAICompatibleVLMClient
+from .multiplexer_vlm_client import MultiplexerVLMClient
 from typing import List, Dict, Any, Optional, Union, Tuple
 from .async_utils import ItemFuture, QueueItem
 import numpy as np
@@ -11,42 +12,80 @@ import json
 
 logger: logging.Logger = logging.getLogger("logger")
 
-_vlm_model: Optional[OpenAICompatibleVLMClient] = None
+_vlm_model: Optional[Union[OpenAICompatibleVLMClient, MultiplexerVLMClient]] = None
 
-def get_vlm_model(config: Dict[str, Any]) -> OpenAICompatibleVLMClient:
+def get_vlm_model(config: Dict[str, Any]) -> Union[OpenAICompatibleVLMClient, MultiplexerVLMClient]:
     global _vlm_model
     if _vlm_model is None:
-        _vlm_model = OpenAICompatibleVLMClient(config=config)
+        # Check if multiplexer mode is enabled
+        if config.get("use_multiplexer", False):
+            _vlm_model = MultiplexerVLMClient(config=config)
+        else:
+            _vlm_model = OpenAICompatibleVLMClient(config=config)
     return _vlm_model
 
 async def vlm_frame_analyzer(data: List[QueueItem]) -> None:
-    for item in data:
+    """
+    Analyze VLM frames with concurrent processing for improved performance.
+    When multiple frames are present, they are processed concurrently rather than sequentially.
+    """
+    if not data:
+        return
+    
+    # If only one item, process it directly to avoid overhead
+    if len(data) == 1:
+        item = data[0]
         item_future: ItemFuture = item.item_future
         try:
             frame_input: Any = item_future[item.input_names[0]]
             client_config: Dict[str, Any] = item_future[item.input_names[1]]
             
-            frame_pil: Image.Image
-            if isinstance(frame_input, Image.Image):
-                frame_pil = frame_input
-            elif hasattr(frame_input, 'cpu') and hasattr(frame_input, 'numpy'):
-                img_np = frame_input.cpu().numpy()
-                if img_np.ndim == 3 and img_np.shape[0] == 3:
-                    img_np = np.transpose(img_np, (1,2,0))
-                if img_np.dtype != np.uint8:
-                    if (img_np.dtype == np.float32 or img_np.dtype == np.float64) and img_np.max() <=1.0 and img_np.min() >=0:
-                        img_np = (img_np * 255)
-                    img_np = img_np.astype(np.uint8)
-                frame_pil = Image.fromarray(img_np)
-            else:
-                raise TypeError(f"Unsupported frame_input type: {type(frame_input)}")
-
-            vlm: OpenAICompatibleVLMClient = get_vlm_model(client_config)
-            scores: Dict[str, float] = vlm.analyze_frame(frame_pil)
+            frame_pil: Image.Image = _convert_frame_to_pil(frame_input)
+            vlm: Union[OpenAICompatibleVLMClient, MultiplexerVLMClient] = get_vlm_model(client_config)
+            scores: Dict[str, float] = await vlm.analyze_frame(frame_pil)
             
             await item_future.set_data(item.output_names[0] if isinstance(item.output_names, list) else item.output_names, scores)
         except Exception as e:
             item_future.set_exception(e)
+        return
+    
+    # For multiple items, process them concurrently
+    logger.debug(f"Processing {len(data)} frames concurrently")
+    
+    async def process_single_frame(item: QueueItem) -> None:
+        item_future: ItemFuture = item.item_future
+        try:
+            frame_input: Any = item_future[item.input_names[0]]
+            client_config: Dict[str, Any] = item_future[item.input_names[1]]
+            
+            frame_pil: Image.Image = _convert_frame_to_pil(frame_input)
+            vlm: Union[OpenAICompatibleVLMClient, MultiplexerVLMClient] = get_vlm_model(client_config)
+            scores: Dict[str, float] = await vlm.analyze_frame(frame_pil)
+            
+            await item_future.set_data(item.output_names[0] if isinstance(item.output_names, list) else item.output_names, scores)
+        except Exception as e:
+            item_future.set_exception(e)
+    
+    # Process all frames concurrently
+    tasks = [process_single_frame(item) for item in data]
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _convert_frame_to_pil(frame_input: Any) -> Image.Image:
+    """Convert various frame input types to PIL Image."""
+    if isinstance(frame_input, Image.Image):
+        return frame_input
+    elif hasattr(frame_input, 'cpu') and hasattr(frame_input, 'numpy'):
+        img_np = frame_input.cpu().numpy()
+        if img_np.ndim == 3 and img_np.shape[0] == 3:
+            img_np = np.transpose(img_np, (1,2,0))
+        if img_np.dtype != np.uint8:
+            if (img_np.dtype == np.float32 or img_np.dtype == np.float64) and img_np.max() <=1.0 and img_np.min() >=0:
+                img_np = (img_np * 255)
+            img_np = img_np.astype(np.uint8)
+        return Image.fromarray(img_np)
+    else:
+        raise TypeError(f"Unsupported frame_input type: {type(frame_input)}")
 
 async def result_coalescer(data: List[QueueItem]) -> None:
     for item_q in data:

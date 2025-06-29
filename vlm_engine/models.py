@@ -9,6 +9,7 @@ from .async_utils import ModelProcessor, QueueItem, ItemFuture
 from .config_models import ModelConfig
 from .preprocessing import preprocess_video
 from .vlm_client import OpenAICompatibleVLMClient
+from .multiplexer_vlm_client import MultiplexerVLMClient
 from typing import Dict, Any, List, Optional, Union, Tuple, Callable
 
 # Placeholder for ModelRunner
@@ -80,7 +81,8 @@ class VLMAIModel(AIModel):
     def __init__(self, configValues: ModelConfig):
         super().__init__(configValues)
         self.client_config: ModelConfig = configValues
-        self.vlm_model: Optional[OpenAICompatibleVLMClient] = None
+        self.vlm_model: Optional[Union[OpenAICompatibleVLMClient, MultiplexerVLMClient]] = None
+        self.use_multiplexer: bool = configValues.use_multiplexer
 
     async def worker_function(self, data: List[QueueItem]):
         self.logger.info(f"VLMAIModel worker_function called with {len(data)} items")
@@ -114,7 +116,7 @@ class VLMAIModel(AIModel):
                     image_np = image_np.astype(np.uint8)
                     image_pil: Image.Image = Image.fromarray(image_np)
                 
-                scores: Dict[str, float] = self.vlm_model.analyze_frame(image_pil)
+                scores: Dict[str, float] = await self.vlm_model.analyze_frame(image_pil)
                 self.logger.debug(f"VLM scores for frame: {scores}")
                 
                 tags = []
@@ -138,7 +140,16 @@ class VLMAIModel(AIModel):
     async def load(self) -> None:
         if self.vlm_model is None:
             self.logger.info(f"Loading VLMAIModel with config: {self.client_config.dict().keys()}")
-            self.vlm_model = OpenAICompatibleVLMClient(config=self.client_config.dict())
+
+            if self.use_multiplexer:
+                self.logger.info("Using MultiplexerVLMClient for load balancing across multiple endpoints")
+                self.vlm_model = MultiplexerVLMClient(config=self.client_config.dict())
+                # Initialize the multiplexer
+                await self.vlm_model._ensure_initialized()
+            else:
+                self.logger.info("Using single endpoint OpenAICompatibleVLMClient")
+                self.vlm_model = OpenAICompatibleVLMClient(config=self.client_config.dict())
+
             self.logger.info("VLMAIModel loaded successfully")
 
 class PythonModel(Model):

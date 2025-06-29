@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="vlm_engine",
-    version="0.1.1",
+    version="0.2.0",
     description="Advanced Vision-Language Model Engine for content tagging",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -19,7 +19,8 @@ setup(
         "pyyaml",
         "opencv-python",
         "decord",
-        "requests"
+        "requests",
+        "multiplexer-llm==0.1.3"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
