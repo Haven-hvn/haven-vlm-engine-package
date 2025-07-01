@@ -32,13 +32,17 @@ class DynamicAIManager:
     def get_dynamic_video_ai_models(self, inputs: List[str], outputs: List[str]) -> List[ModelWrapper]:
         self.load()
         model_wrappers: List[ModelWrapper] = []
-        video_preprocessor: AIModel = self.model_manager.get_or_create_model("video_preprocessor_dynamic")
-        video_preprocessor.model.image_size = self.image_size
-        video_preprocessor.model.normalization_config = self.normalization_config
+        
+        # Use binary search processor for optimized video processing
+        binary_search_processor = self.model_manager.get_or_create_model("binary_search_processor_dynamic")
+        if hasattr(binary_search_processor.model, 'image_size'):
+            binary_search_processor.model.image_size = self.image_size
+        if hasattr(binary_search_processor.model, 'normalization_config'):
+            binary_search_processor.model.normalization_config = self.normalization_config
 
-        model_wrappers.append(ModelWrapper(video_preprocessor, inputs, 
+        model_wrappers.append(ModelWrapper(binary_search_processor, inputs, 
                                          ["dynamic_children", "dynamic_frame", "frame_index", "dynamic_threshold", "dynamic_return_confidence", "dynamic_skipped_categories"], 
-                                         model_name_for_logging="video_preprocessor_dynamic"))
+                                         model_name_for_logging="binary_search_processor_dynamic"))
 
         for model_idx, model in enumerate(self.models):
             # Need to get the ModelProcessor wrapper for the AIModel
