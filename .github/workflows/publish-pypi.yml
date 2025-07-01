@@ -1,0 +1,46 @@
+name: 📦 Publish vlm_engine to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build-n-publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/vlm_engine/
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 🔧 Install build tool
+        run: python -m pip install --upgrade build
+
+      - name: 🏗️ Build package
+        run: python -m build
+
+      - name: 📦 Upload built distributions (for debugging/CI)
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlm_engine-distributions
+          path: dist/
+
+      - name: 📥 Download built distributions (optional step)
+        uses: actions/download-artifact@v4
+        with:
+          name: vlm_engine-distributions
+          path: dist/
+
+      - name: 🚀 Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
