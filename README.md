@@ -8,7 +8,7 @@ A high-performance Python package for Vision-Language Model (VLM) based content 
 - **Context-Aware Detection**: Leverages Vision-Language Models' understanding of visual relationships for accurate content tagging
 - **Flexible Architecture**: Modular pipeline system with configurable models and processing stages
 - **Asynchronous Processing**: Built on asyncio for efficient video and image processing
-- **Customizable Tag Sets**: Easy configuration of detection categories and confidence thresholds
+- **Customizable Tag Sets**: Easy configuration of detection categories
 - **Production Ready**: Includes retry logic, error handling, and comprehensive logging
 
 ## Installation
