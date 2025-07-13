@@ -44,7 +44,10 @@ class ActionRange:
             return True
         if self.confirmed_present and self.end_found is not None:
             return True
-        return self.start_frame >= self.end_frame and not self.searching_end
+        # Prevent premature resolution when start_frame and end_frame cross
+        if (self.start_frame >= self.end_frame) and not self.searching_end and self.start_frame <= self.end_frame:
+            return True
+        return False
     
     def get_start_midpoint(self) -> Optional[int]:
         """Get the midpoint frame for start boundary search"""
@@ -87,6 +90,10 @@ class AdaptiveMidpointCollector:
     
     def collect_unique_midpoints(self, action_ranges: List[ActionRange]) -> Set[int]:
         """Collect all unique midpoint frames from active searches (prioritizes end searches)"""
+        if all(ar.is_resolved() for ar in action_ranges):
+            self.logger.debug("All action searches are already resolved - no midpoints to collect")
+            return set()
+
         midpoints = set()
         start_searches = 0
         end_searches = 0
@@ -157,7 +164,7 @@ class ActionBoundaryDetector:
         
         if action_detected:
             # Action found at midpoint - this could be the start frame
-            if action_range.start_frame == frame_idx:
+            if frame_idx > action_range.start_frame:
                 # Found action at the very start of search range
                 action_range.start_found = frame_idx
                 action_range.confirmed_present = True
@@ -176,7 +183,8 @@ class ActionBoundaryDetector:
                 self.logger.debug(f"Action '{action_range.action_tag}' confirmed absent in range [{action_range.start_frame}, {action_range.end_frame}]")
             else:
                 # Search later in the range
-                action_range.start_frame = frame_idx + 1
+                if frame_idx > action_range.start_frame:
+                    action_range.start_frame = frame_idx + 1  # Only search later if midpoint > start
                 self.logger.debug(f"Action '{action_range.action_tag}' not detected at {frame_idx}, searching later: [{action_range.start_frame}, {action_range.end_frame}]")
     
     def _update_end_boundary(
@@ -197,6 +205,7 @@ class ActionBoundaryDetector:
                 # Action still present, search later
                 action_range.end_search_start = frame_idx + 1
                 self.logger.debug(f"Action '{action_range.action_tag}' still present at {frame_idx}, searching later: [{action_range.end_search_start}, {action_range.end_search_end}]")
+                self.logger.debug(f'Midpoint: {frame_idx}, End Search Start: {action_range.end_search_start}, End Search End: {action_range.end_search_end}')
         else:
             # Action ended - this is past the end frame
             if action_range.end_search_start == frame_idx:
@@ -256,37 +265,57 @@ class VideoFrameExtractor:
             return None
     
     def _extract_frame_pyav(self, video_path: str, frame_idx: int) -> Optional[torch.Tensor]:
-        """Extract frame using PyAV"""
+        """Extract frame using PyAV with resource management and validation"""
         try:
-            container = av.open(video_path)
-            stream = container.streams.video[0]
-            
-            # Seek to approximate time
-            fps = float(stream.average_rate)
-            timestamp = frame_idx / fps
-            container.seek(int(timestamp * av.time_base))
-            
-            current_frame = 0
-            for frame in container.decode(stream):
-                if current_frame == frame_idx:
-                    frame_np = frame.to_ndarray(format='rgb24')
-                    frame_tensor = torch.from_numpy(frame_np).to(self.device)
-                    frame_tensor = crop_black_bars_lr(frame_tensor)
+            if frame_idx < 0:
+                self.logger.warning(f"Frame index {frame_idx} must be non-negative.")
+                return None
+
+            with av.open(video_path) as container:
+                try:
+                    stream = container.streams.video[0]
+                    fps = float(stream.average_rate)
+                    total_frames = stream.frames or 0
                     
-                    if not torch.is_floating_point(frame_tensor):
-                        frame_tensor = frame_tensor.float()
+                    # Skip initial frames not yet present
+                    initial_padding = stream.start_time if hasattr(stream, "start_time") and stream.start_time else 0.0
+                    seek_frame = max(0, frame_idx - initial_padding * fps)
+                    if seek_frame < 0:
+                        self.logger.warning(f"Calculated seek_frame {seek_frame} is invalid after adjusting for initial padding")
+                        return None
                     
-                    if self.use_half_precision:
-                        frame_tensor = frame_tensor.half()
+                    # Seek to approximate time
+                    timestamp = int(seek_frame / fps * av.time_base)
+                    container.seek(timestamp, stream=stream)
                     
-                    container.close()
-                    return frame_tensor
-                current_frame += 1
-            
-            container.close()
+                    current_frame = 0
+                    for frame in container.decode(stream):
+                        if current_frame == seek_frame:
+                            frame_np = frame.to_ndarray(format='rgb24')
+                            frame_tensor = torch.from_numpy(frame_np).to(self.device)
+                            frame_tensor = crop_black_bars_lr(frame_tensor)
+                            
+                            if not torch.is_floating_point(frame_tensor):
+                                frame_tensor = frame_tensor.float()
+                            
+                            if self.use_half_precision:
+                                frame_tensor = frame_tensor.half()
+                            
+                            return frame_tensor
+                        current_frame += 1
+                        
+                        if current_frame > seek_frame + 50:
+                            # Safety threshold to avoid excessive decoding
+                            self.logger.warning(f"Exceeded frame seek threshold seeking {seek_frame}")
+                            break
+                except Exception as e:
+                    self.logger.error(f"PyAV frame extraction error: {e}")
+                    return None
+
+            self.logger.warning(f"Frame index {frame_idx} ({seek_frame} after seek) not found in video")
             return None
         except Exception as e:
-            self.logger.error(f"PyAV frame extraction failed: {e}")
+            self.logger.error(f"Failed to open video file for PyAV extraction: {e}")
             return None
 
 
@@ -298,7 +327,7 @@ class ParallelBinarySearchEngine:
     
     def __init__(
         self, 
-        action_tags: List[str], 
+        action_tags: List[str] = None,
         threshold: float = 0.5,
         device_str: Optional[str] = None,
         use_half_precision: bool = True
@@ -362,7 +391,7 @@ class ParallelBinarySearchEngine:
         
         if total_frames == 0 or fps == 0:
             self.logger.error(f"Invalid video metadata: {total_frames} frames, {fps} fps")
-            return []
+            raise ValueError(f"Invalid video metadata: {total_frames} frames, {fps} fps")
         
         self.logger.info(f"Starting binary search on video: {total_frames} frames @ {fps} fps")
         self.initialize_search_ranges(total_frames)
@@ -406,7 +435,7 @@ class ParallelBinarySearchEngine:
                     )
                     
                     # Store frame result for postprocessing compatibility
-                    frame_identifier = frame_idx / fps if use_timestamps else frame_idx
+                    frame_identifier = float(frame_idx) / fps if use_timestamps else int(frame_idx)
                     frame_result = {
                         "frame_index": frame_identifier,
                         "actiondetection": [
@@ -449,17 +478,17 @@ class ParallelBinarySearchEngine:
         
         for action_range in self.action_ranges:
             if action_range.confirmed_present and action_range.start_found is not None:
-                start_identifier = action_range.start_found / fps if use_timestamps else action_range.start_found
+                start_identifier = float(action_range.start_found) / fps if use_timestamps else int(action_range.start_found)
                 
                 # Use end_found if available, otherwise use start_found (single frame action)
                 end_frame = action_range.end_found if action_range.end_found is not None else action_range.start_found
-                end_identifier = end_frame / fps if use_timestamps else end_frame
+                end_identifier = float(end_frame) / fps if use_timestamps else int(end_frame)
                 
                 segment = {
                     "action_tag": action_range.action_tag,
                     "start_frame": start_identifier,
                     "end_frame": end_identifier,
-                    "duration": end_identifier - start_identifier,
+                    "duration": float(end_identifier - start_identifier),
                     "complete": action_range.end_found is not None
                 }
                 segments.append(segment)
@@ -502,8 +531,13 @@ class BinarySearchProcessor:
         self.logger = logging.getLogger("logger")
         self.device = model_config.device or "cpu"
         self.use_half_precision = True
-        self.process_for_vlm = False
+        self.process_for_vlm = True  # Always enable VLM mode for binary search
         self.binary_search_enabled = True
+        
+        # Required attributes for ModelProcessor compatibility
+        self.instance_count: int = model_config.instance_count
+        self.max_queue_size: Optional[int] = model_config.max_queue_size
+        self.max_batch_size: int = model_config.max_batch_size
         
         self.logger.info("BinarySearchProcessor initialized - parallel binary search enabled")
     
@@ -568,29 +602,25 @@ class BinarySearchProcessor:
                     use_timestamps=use_timestamps
                 )
                 
+                # Sort frame results by frame_index to ensure chronological order for postprocessing
+                # This is critical because binary search processes frames out of order, but the
+                # postprocessing pipeline expects chronological order for proper timespan construction
+                frame_results.sort(key=lambda x: x["frame_index"])
+                
                 # Convert frame results to ItemFuture children for pipeline compatibility
                 children = []
                 for frame_result in frame_results:
                     frame_index = frame_result["frame_index"]
+                    actiondetection = frame_result.get("actiondetection", [])
                     
-                    future_data_payload = {
-                        "dynamic_frame": None,  # Frame tensor not needed for direct results
-                        "frame_index": frame_index,
-                        "dynamic_threshold": threshold,
-                        "dynamic_return_confidence": return_confidence,
-                        "dynamic_skipped_categories": item_future.get(item.input_names[6])
-                    }
+                    self.logger.debug(f'Creating child for frame_index: {frame_index}, actiondetection: {actiondetection}')
                     
-                    # Add action detection results directly
-                    if "actiondetection" in frame_result:
-                        future_data_payload["actiondetection"] = frame_result["actiondetection"]
+                    # Create child ItemFuture with minimal payload
+                    result_future = await ItemFuture.create(item, {}, item_future.handler)
                     
-                    result_future = await ItemFuture.create(item, future_data_payload, item_future.handler)
+                    # Set the required data keys that ResultCoalescer expects
                     await result_future.set_data("frame_index", frame_index)
-                    
-                    # Set action detection results if present
-                    if "actiondetection" in frame_result:
-                        await result_future.set_data("actiondetection", frame_result["actiondetection"])
+                    await result_future.set_data("actiondetection", actiondetection)
                     
                     children.append(result_future)
                 
@@ -605,7 +635,7 @@ class BinarySearchProcessor:
         """Extract VLM configuration from pipeline context"""
         try:
             # Try to get pipeline configuration
-            pipeline = item_future.get("pipeline")
+            pipeline = item_future["pipeline"] if "pipeline" in item_future else None
             if pipeline:
                 # Look for VLM model configuration
                 for model_wrapper in pipeline.models:
@@ -621,7 +651,7 @@ class BinarySearchProcessor:
         from .vlm_batch_coordinator import IntegratedVLMCoordinator
         
         try:
-            pipeline = item_future.get("pipeline")
+            pipeline = item_future["pipeline"] if "pipeline" in item_future else None
             if pipeline:
                 # Create integrated VLM coordinator from pipeline models
                 coordinator = IntegratedVLMCoordinator(pipeline.models)
@@ -642,9 +672,9 @@ class BinarySearchProcessor:
         
         video_path: str = item_future[item.input_names[0]]
         use_timestamps: bool = item_future[item.input_names[1]]
-        frame_interval_override: Optional[float] = item_future[item.input_names[2]]
+        frame_interval_override: Optional[float] = item_future[item.input_names[2]] if item.input_names[2] in item_future else None
         current_frame_interval: float = frame_interval_override if frame_interval_override is not None else 0.5
-        vr_video: bool = item_future.get(item.input_names[5], False)
+        vr_video: bool = item_future[item.input_names[5]] if item.input_names[5] in item_future else False
         
         children = []
         processed_frames_count = 0
@@ -659,9 +689,9 @@ class BinarySearchProcessor:
             future_data_payload = {
                 "dynamic_frame": frame_tensor, 
                 "frame_index": frame_index,
-                "dynamic_threshold": item_future[item.input_names[3]],
-                "dynamic_return_confidence": item_future[item.input_names[4]],
-                "dynamic_skipped_categories": item_future.get(item.input_names[6])
+                "dynamic_threshold": item_future[item.input_names[3]] if item.input_names[3] in item_future else 0.5,
+                "dynamic_return_confidence": item_future[item.input_names[4]] if item.input_names[4] in item_future else True,
+                "dynamic_skipped_categories": item_future[item.input_names[6]] if item.input_names[6] in item_future else None
             }
             result_future = await ItemFuture.create(item, future_data_payload, item_future.handler)
             await result_future.set_data("frame_index", frame_index)
@@ -669,3 +699,17 @@ class BinarySearchProcessor:
         
         await item_future.set_data(item.output_names[0], children)
         self.logger.info(f"Fallback linear processing completed: {processed_frames_count} frames")
+
+    async def load(self) -> None:
+        """Required method for ModelProcessor compatibility"""
+        self.logger.info("BinarySearchProcessor loaded successfully")
+    
+    async def worker_function_wrapper(self, data: List[QueueItem]) -> None:
+        """Wrapper for worker_function to handle exceptions"""
+        try:
+            await self.worker_function(data)
+        except Exception as e:
+            self.logger.error(f"Exception in BinarySearchProcessor worker_function: {e}", exc_info=True)
+            for item in data:
+                if hasattr(item, 'item_future') and item.item_future:
+                    item.item_future.set_exception(e)

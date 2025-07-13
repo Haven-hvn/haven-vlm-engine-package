@@ -47,7 +47,16 @@ async def main():
                 model_id="HuggingFaceTB/SmolVLM-Instruct",
                 model_identifier=93848,
                 model_version="1.0",
-                api_base_url="http://localhost:7045",
+                use_multiplexer=True,
+                multiplexer_endpoints=[
+                    {
+                        "base_url": "https://tricks-wellness-villas-anne.trycloudflare.com/v1",
+                        "api_key": "",  # Use empty string for endpoints that don't require auth
+                        "name": "lm-studio-primary",
+                        "weight": 100,  # Higher weight = more requests
+                        "is_fallback": False
+                    }
+                ],
                 # IMPORTANT: These action tags drive the binary search
                 tag_list = [
                     "Anal Fucking", "Ass Licking", "Ass Penetration", "Ball Licking/Sucking", "Blowjob", "Cum on Person",
@@ -327,7 +336,7 @@ async def main():
     print()
 
     # Process a video with binary search optimization
-    video_path = "path/to/your/video.mp4"  # Replace with a valid video path
+    video_path = "sample.mp4"  # Use the actual sample file
     try:
         print(f"🎬 Processing video: {video_path}")
         print("⚡ Using Parallel Binary Search Engine...")
@@ -371,4 +380,4 @@ async def main():
         print(f"   • Verify binary search processor is properly initialized")
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
