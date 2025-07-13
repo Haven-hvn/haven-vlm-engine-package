@@ -8,6 +8,7 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 import torch
 from PIL import Image
 import numpy as np
@@ -219,15 +220,89 @@ class ActionBoundaryDetector:
 
 
 class VideoFrameExtractor:
-    """Efficiently extracts specific frames from video files"""
+    """Efficiently extracts specific frames from video files with parallel processing and caching"""
     
-    def __init__(self, device_str: Optional[str] = None, use_half_precision: bool = True):
+    def __init__(self, device_str: Optional[str] = None, use_half_precision: bool = True, max_workers: int = 4):
         self.device = torch.device(device_str) if device_str else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.use_half_precision = use_half_precision
+        self.max_workers = max_workers
         self.logger = logging.getLogger("logger")
+        self.frame_cache: Dict[Tuple[str, int], torch.Tensor] = {}
+        self.cache_size_limit = 100  # Increased cache size for better performance
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
     
     def extract_frame(self, video_path: str, frame_idx: int) -> Optional[torch.Tensor]:
-        """Extract a specific frame from video"""
+        """Extract a specific frame from video with caching"""
+        cache_key = (video_path, frame_idx)
+        
+        # Check cache first
+        if cache_key in self.frame_cache:
+            self.logger.debug(f"Cache hit for frame {frame_idx}")
+            return self.frame_cache[cache_key]
+        
+        try:
+            if is_macos_arm:
+                frame_tensor = self._extract_frame_pyav(video_path, frame_idx)
+            else:
+                frame_tensor = self._extract_frame_decord(video_path, frame_idx)
+            
+            # Cache the frame if extraction was successful
+            if frame_tensor is not None:
+                self._cache_frame(cache_key, frame_tensor)
+            
+            return frame_tensor
+        except Exception as e:
+            self.logger.error(f"Failed to extract frame {frame_idx} from {video_path}: {e}")
+            return None
+    
+    async def extract_frames_parallel(self, video_path: str, frame_indices: List[int]) -> Dict[int, Optional[torch.Tensor]]:
+        """Extract multiple frames in parallel"""
+        results = {}
+        
+        # Check cache for existing frames
+        uncached_indices = []
+        for frame_idx in frame_indices:
+            cache_key = (video_path, frame_idx)
+            if cache_key in self.frame_cache:
+                results[frame_idx] = self.frame_cache[cache_key]
+                self.logger.debug(f"Cache hit for frame {frame_idx}")
+            else:
+                uncached_indices.append(frame_idx)
+        
+        if not uncached_indices:
+            return results
+        
+        # Extract uncached frames in parallel
+        loop = asyncio.get_event_loop()
+        
+        async def extract_single_frame(frame_idx: int) -> Tuple[int, Optional[torch.Tensor]]:
+            try:
+                frame_tensor = await loop.run_in_executor(
+                    self.executor, 
+                    self._extract_frame_sync, 
+                    video_path, 
+                    frame_idx
+                )
+                if frame_tensor is not None:
+                    cache_key = (video_path, frame_idx)
+                    self._cache_frame(cache_key, frame_tensor)
+                return frame_idx, frame_tensor
+            except Exception as e:
+                self.logger.error(f"Failed to extract frame {frame_idx}: {e}")
+                return frame_idx, None
+        
+        # Execute all extractions in parallel
+        extraction_tasks = [extract_single_frame(idx) for idx in uncached_indices]
+        extraction_results = await asyncio.gather(*extraction_tasks)
+        
+        # Combine results
+        for frame_idx, frame_tensor in extraction_results:
+            results[frame_idx] = frame_tensor
+        
+        return results
+    
+    def _extract_frame_sync(self, video_path: str, frame_idx: int) -> Optional[torch.Tensor]:
+        """Synchronous frame extraction for use in thread pool"""
         try:
             if is_macos_arm:
                 return self._extract_frame_pyav(video_path, frame_idx)
@@ -236,6 +311,27 @@ class VideoFrameExtractor:
         except Exception as e:
             self.logger.error(f"Failed to extract frame {frame_idx} from {video_path}: {e}")
             return None
+    
+    def _cache_frame(self, cache_key: Tuple[str, int], frame_tensor: torch.Tensor) -> None:
+        """Cache a frame with size limit management"""
+        if len(self.frame_cache) >= self.cache_size_limit:
+            # Remove oldest entry (simple FIFO eviction)
+            oldest_key = next(iter(self.frame_cache))
+            del self.frame_cache[oldest_key]
+            self.logger.debug(f"Evicted cached frame {oldest_key[1]} from {oldest_key[0]}")
+        
+        self.frame_cache[cache_key] = frame_tensor.clone()  # Clone to avoid reference issues
+        self.logger.debug(f"Cached frame {cache_key[1]} from {cache_key[0]}")
+    
+    def clear_cache(self) -> None:
+        """Clear the frame cache"""
+        self.frame_cache.clear()
+        self.logger.debug("Frame cache cleared")
+    
+    def __del__(self):
+        """Cleanup thread pool executor"""
+        if hasattr(self, 'executor'):
+            self.executor.shutdown(wait=False)
     
     def _extract_frame_decord(self, video_path: str, frame_idx: int) -> Optional[torch.Tensor]:
         """Extract frame using decord"""
@@ -346,6 +442,10 @@ class ParallelBinarySearchEngine:
         self.total_frames = 0
         self.api_calls_made = 0
         
+        # VLM analysis result caching
+        self.vlm_cache: Dict[Tuple[str, int], Dict[str, float]] = {}
+        self.vlm_cache_size_limit = 200  # Cache up to 200 VLM analysis results
+        
         self.logger.info(f"ParallelBinarySearchEngine initialized for {len(action_tags)} actions")
     
     def initialize_search_ranges(self, total_frames: int) -> None:
@@ -360,6 +460,8 @@ class ParallelBinarySearchEngine:
             for action_tag in self.action_tags
         ]
         self.api_calls_made = 0
+        # Clear VLM cache for new video
+        self.vlm_cache.clear()
         self.logger.info(f"Initialized search for {len(self.action_tags)} actions across {total_frames} frames")
     
     def has_unresolved_actions(self) -> bool:
@@ -370,10 +472,11 @@ class ParallelBinarySearchEngine:
         self, 
         video_path: str, 
         vlm_analyze_function,
-        use_timestamps: bool = False
+        use_timestamps: bool = False,
+        max_concurrent_vlm_calls: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        Execute parallel binary search across the video.
+        Execute parallel binary search across the video with concurrent VLM processing.
         Returns frame results compatible with existing postprocessing.
         """
         # Get video metadata
@@ -393,11 +496,14 @@ class ParallelBinarySearchEngine:
             self.logger.error(f"Invalid video metadata: {total_frames} frames, {fps} fps")
             raise ValueError(f"Invalid video metadata: {total_frames} frames, {fps} fps")
         
-        self.logger.info(f"Starting binary search on video: {total_frames} frames @ {fps} fps")
+        self.logger.info(f"Starting parallel binary search on video: {total_frames} frames @ {fps} fps")
         self.initialize_search_ranges(total_frames)
         
         frame_results = []
         processed_frames = set()
+        
+        # Create semaphore to limit concurrent VLM calls
+        vlm_semaphore = asyncio.Semaphore(max_concurrent_vlm_calls)
         
         # Binary search loop
         while self.has_unresolved_actions():
@@ -408,48 +514,89 @@ class ParallelBinarySearchEngine:
                 self.logger.warning("No midpoints collected but unresolved actions remain")
                 break
             
-            # Process each unique frame
-            for frame_idx in sorted(midpoints):
-                if frame_idx in processed_frames:
+            # Filter out already processed frames
+            unprocessed_midpoints = [idx for idx in midpoints if idx not in processed_frames]
+            
+            if not unprocessed_midpoints:
+                continue
+            
+            # Process all frames in this iteration concurrently
+            async def process_single_frame(frame_idx: int) -> Optional[Dict[str, Any]]:
+                """Process a single frame with VLM analysis and caching"""
+                async with vlm_semaphore:
+                    try:
+                        # Check VLM cache first
+                        vlm_cache_key = (video_path, frame_idx)
+                        if vlm_cache_key in self.vlm_cache:
+                            action_results = self.vlm_cache[vlm_cache_key]
+                            self.logger.debug(f"VLM cache hit for frame {frame_idx}")
+                        else:
+                            # Extract frame
+                            frame_tensor = self.frame_extractor.extract_frame(video_path, frame_idx)
+                            if frame_tensor is None:
+                                self.logger.warning(f"Failed to extract frame {frame_idx}")
+                                return None
+                            
+                            # Convert to PIL for VLM processing
+                            frame_pil = self._convert_tensor_to_pil(frame_tensor)
+                            if frame_pil is None:
+                                return None
+                            
+                            # Analyze frame with VLM
+                            action_results = await vlm_analyze_function(frame_pil)
+                            self.api_calls_made += 1
+                            
+                            # Cache the VLM analysis result
+                            self._cache_vlm_result(vlm_cache_key, action_results)
+                        
+                        # Store frame result for postprocessing compatibility
+                        frame_identifier = float(frame_idx) / fps if use_timestamps else int(frame_idx)
+                        frame_result = {
+                            "frame_index": frame_identifier,
+                            "frame_idx": frame_idx,  # Keep original index for boundary updates
+                            "action_results": action_results,
+                            "actiondetection": [
+                                (tag, confidence) for tag, confidence in action_results.items()
+                                if confidence >= self.threshold
+                            ]
+                        }
+                        
+                        self.logger.debug(f"Processed frame {frame_idx}, API calls: {self.api_calls_made}")
+                        return frame_result
+                        
+                    except Exception as e:
+                        self.logger.error(f"VLM analysis failed for frame {frame_idx}: {e}")
+                        return None
+            
+            # Execute all frame processing tasks concurrently
+            self.logger.debug(f"Processing {len(unprocessed_midpoints)} frames concurrently")
+            frame_tasks = [process_single_frame(frame_idx) for frame_idx in unprocessed_midpoints]
+            concurrent_results = await asyncio.gather(*frame_tasks, return_exceptions=True)
+            
+            # Process results and update boundaries
+            for i, result in enumerate(concurrent_results):
+                if isinstance(result, Exception):
+                    self.logger.error(f"Frame processing failed: {result}")
                     continue
                 
-                # Extract frame
-                frame_tensor = self.frame_extractor.extract_frame(video_path, frame_idx)
-                if frame_tensor is None:
-                    self.logger.warning(f"Failed to extract frame {frame_idx}")
+                if result is None:
                     continue
                 
-                # Convert to PIL for VLM processing
-                frame_pil = self._convert_tensor_to_pil(frame_tensor)
-                if frame_pil is None:
-                    continue
+                frame_idx = result["frame_idx"]
+                action_results = result["action_results"]
                 
-                # Analyze frame with VLM
-                try:
-                    action_results = await vlm_analyze_function(frame_pil)
-                    self.api_calls_made += 1
-                    
-                    # Update all action boundaries based on this frame's results
-                    self.boundary_detector.update_action_boundaries(
-                        self.action_ranges, frame_idx, action_results, total_frames
-                    )
-                    
-                    # Store frame result for postprocessing compatibility
-                    frame_identifier = float(frame_idx) / fps if use_timestamps else int(frame_idx)
-                    frame_result = {
-                        "frame_index": frame_identifier,
-                        "actiondetection": [
-                            (tag, confidence) for tag, confidence in action_results.items()
-                            if confidence >= self.threshold
-                        ]
-                    }
-                    frame_results.append(frame_result)
-                    processed_frames.add(frame_idx)
-                    
-                    self.logger.debug(f"Processed frame {frame_idx}, API calls: {self.api_calls_made}")
-                    
-                except Exception as e:
-                    self.logger.error(f"VLM analysis failed for frame {frame_idx}: {e}")
+                # Update all action boundaries based on this frame's results
+                self.boundary_detector.update_action_boundaries(
+                    self.action_ranges, frame_idx, action_results, total_frames
+                )
+                
+                # Store frame result (remove internal fields)
+                frame_result = {
+                    "frame_index": result["frame_index"],
+                    "actiondetection": result["actiondetection"]
+                }
+                frame_results.append(frame_result)
+                processed_frames.add(frame_idx)
         
         # Generate action segment results with start/end frame information
         action_segments = self._generate_action_segments(fps, use_timestamps)
@@ -459,7 +606,7 @@ class ParallelBinarySearchEngine:
         efficiency = ((linear_calls - self.api_calls_made) / linear_calls * 100) if linear_calls > 0 else 0
         
         self.logger.info(
-            f"Binary search completed: {self.api_calls_made} API calls "
+            f"Parallel binary search completed: {self.api_calls_made} API calls "
             f"(vs ~{linear_calls} linear), {efficiency:.1f}% reduction"
         )
         
@@ -494,6 +641,23 @@ class ParallelBinarySearchEngine:
                 segments.append(segment)
         
         return segments
+    
+    def _cache_vlm_result(self, cache_key: Tuple[str, int], action_results: Dict[str, float]) -> None:
+        """Cache VLM analysis result with size limit management"""
+        if len(self.vlm_cache) >= self.vlm_cache_size_limit:
+            # Remove oldest entry (simple FIFO eviction)
+            oldest_key = next(iter(self.vlm_cache))
+            del self.vlm_cache[oldest_key]
+            self.logger.debug(f"Evicted cached VLM result for frame {oldest_key[1]} from {oldest_key[0]}")
+        
+        # Store a copy of the results to avoid reference issues
+        self.vlm_cache[cache_key] = action_results.copy()
+        self.logger.debug(f"Cached VLM result for frame {cache_key[1]} from {cache_key[0]}")
+    
+    def clear_vlm_cache(self) -> None:
+        """Clear the VLM analysis cache"""
+        self.vlm_cache.clear()
+        self.logger.debug("VLM analysis cache cleared")
     
     def _convert_tensor_to_pil(self, frame_tensor: torch.Tensor) -> Optional[Image.Image]:
         """Convert frame tensor to PIL Image for VLM processing"""
