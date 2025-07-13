@@ -250,6 +250,11 @@ class ModelManager:
             case "video_preprocessor":
                 model_instance = VideoPreprocessorModel(model_config)
                 return ModelProcessor(model_instance)
+            case "binary_search_processor":
+                # New binary search processor for optimized video processing
+                from .binary_search_processor import BinarySearchProcessor
+                model_instance = BinarySearchProcessor(model_config)
+                return ModelProcessor(model_instance)
             case "vlm_model":
                 model_instance = VLMAIModel(model_config)
                 model_processor: ModelProcessor = ModelProcessor(model_instance)

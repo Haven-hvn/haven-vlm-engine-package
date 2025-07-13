@@ -51,25 +51,11 @@ async def main():
                 # Configure multiple endpoints for load balancing
                 multiplexer_endpoints=[
                     {
-                        "base_url": "http://192.168.68.70:1234/v1",
+                        "base_url": "https://tricks-wellness-villas-anne.trycloudflare.com/v1",
                         "api_key": "",  # Use empty string for endpoints that don't require auth
-                        "name": "lm-studio-primary",
-                        "weight": 5,  # Higher weight = more requests
+                        "name": "haven-adult",
+                        "weight": 100,  # Higher weight = more requests
                         "is_fallback": False
-                    },
-                    {
-                        "base_url": "http://192.168.68.67:7045/v1", 
-                        "api_key": "",
-                        "name": "lm-studio-secondary",
-                        "weight": 3,
-                        "is_fallback": False
-                    },
-                    {
-                        "base_url": "http://localhost:7045/v1",
-                        "api_key": "",
-                        "name": "local-fallback",
-                        "weight": 1,
-                        "is_fallback": True  # This endpoint will be used as fallback
                     }
                 ],
                 tag_list=[
@@ -153,7 +139,7 @@ async def main():
     await engine.initialize()
 
     # Process a video using the multiplexer for load balancing
-    video_path = "K:\\sample.mp4"  # Replace with a valid video path
+    video_path = "/home/user/haven-vlm-engine-package/sample.mp4"  # Replace with a valid video path
     try:
         print("Processing video with multiplexer load balancing...")
         results = await engine.process_video(
