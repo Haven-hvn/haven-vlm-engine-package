@@ -21,6 +21,7 @@ class ActionRange:
     end_search_start: Optional[int] = None  # Start of end search range
     end_search_end: Optional[int] = None    # End of end search range
     searching_end: bool = False  # Flag for end search mode
+    added: bool = False  # Whether this range has been added to segments
 
     def is_resolved(self) -> bool:
         """Check if this action search is complete"""

@@ -5,13 +5,25 @@ Replaces linear frame sampling with intelligent boundary detection.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
+import torch
+import numpy as np
+from PIL import Image
 
 from .action_range import ActionRange
 from .adaptive_midpoint_collector import AdaptiveMidpointCollector
 from .action_boundary_detector import ActionBoundaryDetector
 from .video_frame_extractor import VideoFrameExtractor
 from .preprocessing import get_video_duration_decord, is_macos_arm
+
+try:
+    import decord  # type: ignore
+except ImportError:
+    decord = None
+try:
+    import av  # type: ignore
+except ImportError:
+    av = None
 
 class ParallelBinarySearchEngine:
     """
@@ -21,12 +33,12 @@ class ParallelBinarySearchEngine:
     
     def __init__(
         self, 
-        action_tags: List[str] = None,
+        action_tags: Optional[List[str]] = None,
         threshold: float = 0.5,
         device_str: Optional[str] = None,
         use_half_precision: bool = True
     ):
-        self.action_tags = action_tags
+        self.action_tags = action_tags or []
         self.threshold = threshold
         self.logger = logging.getLogger("logger")
         
@@ -44,7 +56,7 @@ class ParallelBinarySearchEngine:
         self.vlm_cache: Dict[Tuple[str, int], Dict[str, float]] = {}
         self.vlm_cache_size_limit = 200  # Cache up to 200 VLM analysis results
         
-        self.logger.info(f"ParallelBinarySearchEngine initialized for {len(action_tags)} actions")
+        self.logger.info(f"ParallelBinarySearchEngine initialized for {len(self.action_tags)} actions")
     
     def initialize_search_ranges(self, total_frames: int) -> None:
         """Initialize search ranges for all actions"""
@@ -79,12 +91,16 @@ class ParallelBinarySearchEngine:
         """
         # Get video metadata
         if is_macos_arm:
+            if av is None:
+                raise ImportError("PyAV is required on macOS ARM")
             container = av.open(video_path)
             stream = container.streams.video[0]
             fps = float(stream.average_rate)
             total_frames = stream.frames or 0
             container.close()
         else:
+            if decord is None:
+                raise ImportError("Decord is required on this platform")
             vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
             fps = vr.get_avg_fps()
             total_frames = len(vr)
@@ -180,6 +196,7 @@ class ParallelBinarySearchEngine:
                 if result is None:
                     continue
                 
+                result = cast(Dict[str, Any], result)
                 frame_idx = result["frame_idx"]
                 action_results = result["action_results"]
                 
@@ -191,7 +208,9 @@ class ParallelBinarySearchEngine:
                 # Store frame result (remove internal fields)
                 frame_result = {
                     "frame_index": result["frame_index"],
-                    "actiondetection": result["actiondetection"]
+                    "actiondetection": result["actiondetection"],
+                    "frame_idx": result["frame_idx"],
+                    "action_results": result["action_results"]
                 }
                 frame_results.append(frame_result)
                 processed_frames.add(frame_idx)
@@ -281,3 +300,15 @@ class ParallelBinarySearchEngine:
         except Exception as e:
             self.logger.error(f"Failed to convert tensor to PIL: {e}")
             return None
+
+    def get_detected_segments(self) -> List[Dict[str, Any]]:
+        """Get all detected action segments"""
+        segments = []
+        for action_range in self.action_ranges:
+            if action_range.confirmed_present and action_range.start_found is not None and action_range.end_found is not None:
+                segments.append({
+                    "action_tag": action_range.action_tag,
+                    "start": action_range.start_found,
+                    "end": action_range.end_found
+                })
+        return segments
