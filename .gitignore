@@ -2,4 +2,4 @@
 .DS_Store
 *.pyc
 /venv
-sample.mp4
+sample*
