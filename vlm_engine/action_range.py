@@ -61,14 +61,32 @@ class ActionRange:
         return (self.start_frame + self.end_frame) // 2
 
     def get_end_midpoint(self) -> Optional[int]:
-        """Get the midpoint frame for end boundary search"""
+        """Get the midpoint frame for end boundary search with left bias"""
         if not self.searching_end or self.end_found is not None:
             return None
         if self.end_search_start is None or self.end_search_end is None:
             return None
         if self.end_search_start >= self.end_search_end:
             return None
-        return (self.end_search_start + self.end_search_end) // 2
+        
+        # Bias toward the left (start) side since end frames are likely closer to start frames
+        # Use 1/3 point instead of 1/2 point for the first few iterations
+        search_range = self.end_search_end - self.end_search_start
+        
+        # For small ranges, use standard midpoint
+        if search_range <= 3:
+            return (self.end_search_start + self.end_search_end) // 2
+        
+        # For larger ranges, bias toward the left side
+        # Use 1/3 point for early iterations, gradually moving toward standard midpoint
+        if self.current_depth <= 2:
+            # First 2 iterations: search at 1/3 point (closer to start)
+            bias_offset = search_range // 3
+        else:
+            # Later iterations: use standard midpoint
+            bias_offset = search_range // 2
+            
+        return self.end_search_start + bias_offset
 
     def get_midpoint(self) -> Optional[int]:
         """Get the next midpoint frame for binary search (prioritizes end search)"""

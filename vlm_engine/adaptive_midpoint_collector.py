@@ -15,7 +15,7 @@ class AdaptiveMidpointCollector:
     def collect_unique_midpoints(self, action_ranges: List['ActionRange']) -> List[int]:
         """
         Collect all unique midpoint frames from active searches, sorted in ascending order.
-        This prioritizes the left side of the search space.
+        This prioritizes the left side of the search space and implements left-biased strategy.
         """
         if all(ar.is_resolved() for ar in action_ranges):
             self.logger.debug("All action searches are already resolved - no midpoints to collect")
@@ -24,6 +24,7 @@ class AdaptiveMidpointCollector:
         midpoints: set[int] = set()
         start_searches = 0
         end_searches = 0
+        left_biased_searches = 0
         
         for action_range in action_ranges:
             if action_range.is_resolved():
@@ -39,6 +40,15 @@ class AdaptiveMidpointCollector:
             if end_midpoint is not None:
                 midpoints.add(end_midpoint)
                 end_searches += 1
+                
+                # Track if this is using left-biased strategy
+                if (action_range.searching_end and 
+                    action_range.end_search_start is not None and 
+                    action_range.end_search_end is not None and
+                    action_range.current_depth <= 2 and
+                    (action_range.end_search_end - action_range.end_search_start) > 3):
+                    left_biased_searches += 1
+                    
                 continue
                 
             # Add start search midpoints
@@ -47,5 +57,10 @@ class AdaptiveMidpointCollector:
                 midpoints.add(start_midpoint)
                 start_searches += 1
         
-        self.logger.debug(f"Collected {len(midpoints)} unique midpoints: {start_searches} start searches, {end_searches} end searches")
+        if left_biased_searches > 0:
+            self.logger.debug(f"Collected {len(midpoints)} unique midpoints: {start_searches} start searches, "
+                            f"{end_searches} end searches ({left_biased_searches} using left-bias)")
+        else:
+            self.logger.debug(f"Collected {len(midpoints)} unique midpoints: {start_searches} start searches, {end_searches} end searches")
+        
         return sorted(list(midpoints))

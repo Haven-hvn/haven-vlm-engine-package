@@ -57,9 +57,13 @@ class ActionBoundaryDetector:
                     # and search for a later end frame.
                     action_range.end_found = frame_idx
                     action_range.end_search_start = frame_idx + 1
+                    self.logger.debug(f"Action '{action_range.action_tag}' present at frame {frame_idx}, "
+                                    f"searching right from {action_range.end_search_start}")
                 else:
                     # Action is absent, so the actual end must be before this frame.
                     action_range.end_search_end = frame_idx - 1
+                    self.logger.debug(f"Action '{action_range.action_tag}' absent at frame {frame_idx}, "
+                                    f"searching left up to {action_range.end_search_end}")
                 
                 # If the search range has crossed, the end boundary is found.
                 # The last recorded end_found is the correct end frame.
