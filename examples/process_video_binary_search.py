@@ -38,7 +38,10 @@ async def main():
             # NEW: Binary Search Processor replaces video_preprocessor_dynamic
             "binary_search_processor_dynamic": ModelConfig(
                 type="binary_search_processor", 
-                model_file_name="binary_search_processor_dynamic"
+                model_file_name="binary_search_processor_dynamic",
+                instance_count=10,           # Multiple instances for parallel video processing
+                max_batch_size=1,            # Process one video at a time for better concurrency
+                max_concurrent_requests=20,  # Allow concurrent video processing
             ),
             "vlm_nsfw_model": ModelConfig(
                 type="vlm_model",
@@ -48,6 +51,11 @@ async def main():
                 model_identifier=93848,
                 model_version="1.0",
                 use_multiplexer=True,
+                # Increase concurrency limits for parallel video processing
+                max_concurrent_requests=50,  # Increased from default 20
+                connection_pool_size=100,    # Increased from default 50
+                instance_count=10,           # Multiple instances for parallel processing
+                max_batch_size=1,            # Process one frame at a time for better concurrency
                 multiplexer_endpoints=[
                     {
                         "base_url": "https://ethical-jennifer-phys-combining.trycloudflare.com/v1/",
@@ -336,48 +344,75 @@ async def main():
     print()
 
     # Process a video with binary search optimization
-    video_path = "sample.mp4"  # Use the actual sample file
+    videos = ["sample1.mp4", "sample2.mp4"]
     try:
-        print(f"🎬 Processing video: {video_path}")
-        print("⚡ Using Parallel Binary Search Engine...")
+        # Increase semaphore limit significantly for video processing
+        # The issue was that the semaphore was too restrictive (5) for proper video processing
+        semaphore = asyncio.Semaphore(20)
         
-        results = await engine.process_video(
-            video_path,
-            frame_interval=30.0,
-            return_timestamps=True,
-            threshold=0.5,
-            return_confidence=True
-        )
-        
-        print("\n📈 Binary Search Performance Results:")
-        print(f"✅ Video processing completed successfully!")
-        print(f"📋 Results structure: {type(results)}")
-        
-        if isinstance(results, dict):
-            json_result = results.get("json_result", {})
-            if "metadata" in json_result:
-                print(f"📊 Video duration: {json_result['metadata'].get('duration', 'N/A')}s")
-            
-            if "timespans" in json_result:
-                total_detections = sum(
-                    len(tags) for tags in json_result["timespans"].values()
+        async def process_video_with_semaphore(video_path, video_index):
+            async with semaphore:
+                print(f"🎬 Starting video {video_index + 1}: {video_path}")
+                start_time = asyncio.get_event_loop().time()
+                
+                result = await engine.process_video(
+                    video_path,
+                    frame_interval=30.0,
+                    return_timestamps=True,
+                    threshold=0.5,
+                    return_confidence=True
                 )
-                print(f"🎯 Total action detections: {total_detections}")
+                
+                end_time = asyncio.get_event_loop().time()
+                duration = end_time - start_time
+                print(f"✅ Completed video {video_index + 1} in {duration:.2f}s")
+                return result
+
+        # Create tasks with proper indexing for debugging
+        tasks = [
+            asyncio.create_task(process_video_with_semaphore(video_path, i)) 
+            for i, video_path in enumerate(videos)
+        ]
         
-        print(f"\n🔥 Expected improvement over linear sampling:")
-        print(f"   • Traditional approach: ~1000+ API calls")
-        print(f"   • Binary search approach: ~20-50 API calls")
-        print(f"   • Performance gain: 95%+ reduction in processing time")
+        print(f"⚡ Processing {len(videos)} videos concurrently with semaphore limit of 20...")
+        print("📊 Watch for concurrent execution in the output timestamps...")
         
-        # Detailed results
-        print(f"\n📊 Full results: {results}")
+        # Use asyncio.as_completed to see results as they finish (proves concurrency)
+        results = []
+        completed_tasks = asyncio.as_completed(tasks)
+        
+        for i, completed_task in enumerate(completed_tasks):
+            result = await completed_task
+            results.append(result)
+            print(f"🏁 Video {i + 1} finished processing")
+        
+        print(f"🎉 All {len(videos)} videos completed!")
+        
+        for i, result in enumerate(results, 1):
+            print(f"\n📈 Results for video {i}:")
+            print(f"✅ Processing completed successfully!")
+            print(f"📋 Results structure: {type(result)}")
+
+            if isinstance(result, dict):
+                json_result = result.get("json_result", {})
+                if "metadata" in json_result:
+                    print(f"📊 Video duration: {json_result['metadata'].get('duration', 'N/A')}s")
+
+                if "timespans" in json_result:
+                    total_detections = sum(
+                        len(tags) for tags in json_result["timespans"].values()
+                    )
+                    print(f"🎯 Total action detections: {total_detections}")
+
+            print(f"\n📊 Full results for video {i}: {result}")
         
     except Exception as e:
-        logging.error(f"❌ Error processing video: {e}", exc_info=True)
+        logging.error(f"❌ Error processing videos: {e}", exc_info=True)
         print(f"\n🔧 Troubleshooting tips:")
-        print(f"   • Ensure video path is correct: {video_path}")
+        print(f"   • Ensure video paths are correct: {videos}")
         print(f"   • Check VLM API endpoint is running on http://localhost:7045")
         print(f"   • Verify binary search processor is properly initialized")
+        print(f"   • Make sure all video files exist in the current directory")
 
 if __name__ == "__main__":
     asyncio.run(main())
