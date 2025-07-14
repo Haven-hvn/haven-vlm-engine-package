@@ -202,16 +202,13 @@ def compute_video_timespans(video_result: AIVideoResult, category_config: Dict) 
             final_tag_timeframes: List[TimeFrame] = []
             for tf_data in processed_timeframes:
                 tf = tf_data['obj']
-                if hasattr(tf, 'start') and (
-                    (hasattr(tf, 'end') and tf.end is not None and (tf.end - tf.start >= tag_min_duration)) or 
-                    ((not hasattr(tf, 'end') or tf.end is None) and tag_min_duration <= frame_interval)
-                ):
+                if hasattr(tf, 'start') and hasattr(tf, 'end') and tf.end is not None and (tf.end - tf.start >= tag_min_duration):
                     # Calculate average confidence for merged timeframes
                     total_confidence = tf_data['confidence_sum'] / tf_data['confidence_count'] if tf_data['confidence_count'] > 0 else tf.confidence
                     final_tag_timeframes.append(
                         TimeFrame(
                             start=tf.start, 
-                            end=(tf.end if hasattr(tf, 'end') and tf.end is not None else tf.start), 
+                            end=tf.end, 
                             totalConfidence=total_confidence
                         )
                     )
