@@ -343,7 +343,7 @@ async def main():
         
         results = await engine.process_video(
             video_path,
-            frame_interval=2.0,  # This parameter is ignored in binary search mode
+            frame_interval=30.0,
             return_timestamps=True,
             threshold=0.5,
             return_confidence=True

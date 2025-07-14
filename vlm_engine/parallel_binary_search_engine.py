@@ -36,12 +36,10 @@ class ParallelBinarySearchEngine:
         action_tags: Optional[List[str]] = None,
         threshold: float = 0.5,
         device_str: Optional[str] = None,
-        use_half_precision: bool = True,
-        scan_frame_step: int = 30  # New parameter for Phase 1 sampling rate
+        use_half_precision: bool = True
     ):
         self.action_tags = action_tags or []
         self.threshold = threshold
-        self.scan_frame_step = scan_frame_step  # Frames to skip in linear scan
         self.logger = logging.getLogger("logger")
         
         # Core components
@@ -59,7 +57,7 @@ class ParallelBinarySearchEngine:
         self.vlm_cache: Dict[Tuple[str, int], Dict[str, float]] = {}
         self.vlm_cache_size_limit = 200  # Cache up to 200 VLM analysis results
         
-        self.logger.info(f"ParallelBinarySearchEngine initialized for {len(self.action_tags)} actions with scan_frame_step={scan_frame_step}")
+        self.logger.info(f"ParallelBinarySearchEngine initialized for {len(self.action_tags)} actions")
     
     def initialize_search_ranges(self, total_frames: int) -> None:
         """Initialize search ranges for all actions"""
@@ -85,6 +83,7 @@ class ParallelBinarySearchEngine:
         self, 
         video_path: str, 
         vlm_analyze_function,
+        frame_interval: float = 1.0, # Now represents the scan_frame_step in phase 1
         use_timestamps: bool = False,
         max_concurrent_vlm_calls: int = 5
     ) -> List[Dict[str, Any]]:
@@ -126,9 +125,9 @@ class ParallelBinarySearchEngine:
         vlm_semaphore = asyncio.Semaphore(max_concurrent_vlm_calls)
         
         # PHASE 1: Linear scan to find candidate action starts
-        self.logger.info(f"Phase 1: Linear scan with frame step {self.scan_frame_step}")
+        self.logger.info(f"Phase 1: Linear scan with frame step {frame_interval}")
         candidate_segments = await self._phase1_linear_scan(
-            video_path, vlm_analyze_function, vlm_semaphore, total_frames, fps, use_timestamps
+            video_path, vlm_analyze_function, vlm_semaphore, total_frames, fps, use_timestamps, frame_interval
         )
         
         # PHASE 2: Parallel binary search to refine action ends
@@ -167,7 +166,8 @@ class ParallelBinarySearchEngine:
         vlm_semaphore: asyncio.Semaphore,
         total_frames: int,
         fps: float,
-        use_timestamps: bool
+        use_timestamps: bool,
+        frame_interval: float # Frame interval for linear scan
     ) -> List[Dict[str, Any]]:
         """
         Phase 1: Linear scan to find candidate action starts.
@@ -180,12 +180,14 @@ class ParallelBinarySearchEngine:
         # Track last known state for each action to detect transitions
         last_action_states = {action_tag: False for action_tag in self.action_tags}
         
-        # Sample frames at regular intervals
-        scan_frames = list(range(0, total_frames, self.scan_frame_step))
+        # Sample frames at regular intervals. Convert frame_interval from seconds to frames.
+        # Ensure frame_step is at least 1 frame.
+        frame_step_frames = max(1, int(frame_interval * fps)) 
+        scan_frames = list(range(0, total_frames, frame_step_frames))
         if scan_frames[-1] != total_frames - 1:
             scan_frames.append(total_frames - 1)  # Always include the last frame
         
-        self.logger.info(f"Phase 1: Scanning {len(scan_frames)} frames (every {self.scan_frame_step} frames)")
+        self.logger.info(f"Phase 1: Scanning {len(scan_frames)} frames (every {frame_step_frames} frames)")
         
         # Process frames concurrently
         async def process_scan_frame(frame_idx: int) -> Optional[Dict[str, Any]]:
