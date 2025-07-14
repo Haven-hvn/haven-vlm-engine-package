@@ -29,6 +29,11 @@ class AdaptiveMidpointCollector:
             if action_range.is_resolved():
                 continue
                 
+            # Skip actions that have reached their depth limit
+            if action_range.has_reached_max_depth():
+                self.logger.debug(f"Skipping action '{action_range.action_tag}' - reached max depth {action_range.max_depth}")
+                continue
+                
             # Prioritize end searches over start searches
             end_midpoint = action_range.get_end_midpoint()
             if end_midpoint is not None:

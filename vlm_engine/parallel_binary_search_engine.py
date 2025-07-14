@@ -5,6 +5,7 @@ Replaces pure binary search with a more reliable two-phase process.
 
 import asyncio
 import logging
+import math
 from typing import Any, Dict, List, Optional, Tuple, cast
 import torch
 import numpy as np
@@ -78,6 +79,13 @@ class ParallelBinarySearchEngine:
     def has_unresolved_actions(self) -> bool:
         """Check if there are still actions being searched"""
         return any(not action_range.is_resolved() for action_range in self.action_ranges)
+    
+    def _has_actions_within_depth_limit(self) -> bool:
+        """Check if any actions are still within their depth limits"""
+        return any(
+            not action_range.is_resolved() and not action_range.has_reached_max_depth()
+            for action_range in self.action_ranges
+        )
     
     async def process_video_binary_search(
         self, 
@@ -182,7 +190,7 @@ class ParallelBinarySearchEngine:
         
         # Sample frames at regular intervals. Convert frame_interval from seconds to frames.
         # Ensure frame_step is at least 1 frame.
-        frame_step_frames = max(1, int(frame_interval * fps)) 
+        frame_step_frames = max(1, int(frame_interval * fps)) * 2
         scan_frames = list(range(0, total_frames, frame_step_frames))
         if scan_frames[-1] != total_frames - 1:
             scan_frames.append(total_frames - 1)  # Always include the last frame
@@ -306,13 +314,18 @@ class ParallelBinarySearchEngine:
             action_range.confirmed_present = True
             action_range.start_found = segment["start_frame"]
             action_range.initiate_end_search(total_frames)
+            # Reset depth counter for end search
+            action_range.reset_depth_for_end_search()
             self.action_ranges.append(action_range)
         
-        # Binary search loop to find action end boundaries
-        max_iterations = 50  # Prevent infinite loops
+        # Log per-action depth information
+        for action_range in self.action_ranges:
+            search_range = action_range.end_search_end - action_range.end_search_start + 1 if action_range.end_search_end and action_range.end_search_start else 0
+            self.logger.info(f"Action '{action_range.action_tag}': max_depth={action_range.max_depth}, search_range={search_range}")
+        
         iteration = 0
         
-        while self.has_unresolved_actions() and iteration < max_iterations:
+        while self.has_unresolved_actions() and self._has_actions_within_depth_limit():
             iteration += 1
             
             # Guard against stalled searches
@@ -408,6 +421,17 @@ class ParallelBinarySearchEngine:
                 
                 # Store frame result
                 processed_frame_data[frame_idx] = result
+        
+        # Log per-action completion status
+        for action_range in self.action_ranges:
+            if action_range.is_resolved():
+                completion_reason = "boundary found"
+            elif action_range.has_reached_max_depth():
+                completion_reason = f"max depth {action_range.max_depth} reached"
+            else:
+                completion_reason = "still searching"
+            
+            self.logger.info(f"Action '{action_range.action_tag}': depth {action_range.current_depth}/{action_range.max_depth}, {completion_reason}")
         
         self.logger.info(f"Phase 2 complete: Processed {len(processed_frame_data)} frames in {iteration} iterations")
         return processed_frame_data
