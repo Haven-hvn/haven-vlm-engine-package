@@ -44,13 +44,13 @@ async def main():
                 type="vlm_model",
                 model_file_name="vlm_nsfw_model",
                 model_category="actiondetection",
-                model_id="HuggingFaceTB/SmolVLM-Instruct",
+                model_id="Haven-adult",
                 model_identifier=93848,
                 model_version="1.0",
                 use_multiplexer=True,
                 multiplexer_endpoints=[
                     {
-                        "base_url": "https://tricks-wellness-villas-anne.trycloudflare.com/v1",
+                        "base_url": "https://ethical-jennifer-phys-combining.trycloudflare.com/v1/",
                         "api_key": "",  # Use empty string for endpoints that don't require auth
                         "name": "lm-studio-primary",
                         "weight": 100,  # Higher weight = more requests

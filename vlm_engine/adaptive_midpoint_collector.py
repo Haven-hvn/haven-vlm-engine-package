@@ -4,7 +4,7 @@ Collects unique frame indices from all active action searches
 
 from .action_range import ActionRange
 import logging
-from typing import List, Set
+from typing import List
 
 class AdaptiveMidpointCollector:
     """Collects unique frame indices from all active action searches"""
@@ -12,13 +12,16 @@ class AdaptiveMidpointCollector:
     def __init__(self):
         self.logger = logging.getLogger("logger")
     
-    def collect_unique_midpoints(self, action_ranges: List['ActionRange']) -> Set[int]:
-        """Collect all unique midpoint frames from active searches (prioritizes end searches)"""
+    def collect_unique_midpoints(self, action_ranges: List['ActionRange']) -> List[int]:
+        """
+        Collect all unique midpoint frames from active searches, sorted in ascending order.
+        This prioritizes the left side of the search space.
+        """
         if all(ar.is_resolved() for ar in action_ranges):
             self.logger.debug("All action searches are already resolved - no midpoints to collect")
-            return set()
+            return []
 
-        midpoints = set()
+        midpoints: set[int] = set()
         start_searches = 0
         end_searches = 0
         
@@ -40,4 +43,4 @@ class AdaptiveMidpointCollector:
                 start_searches += 1
         
         self.logger.debug(f"Collected {len(midpoints)} unique midpoints: {start_searches} start searches, {end_searches} end searches")
-        return midpoints
+        return sorted(list(midpoints))

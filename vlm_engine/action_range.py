@@ -2,7 +2,6 @@
 Represents the search range for a specific action with dual boundary detection
 """
 
-from .action_range import ActionRange
 from dataclasses import dataclass
 from typing import Optional
 
@@ -22,17 +21,28 @@ class ActionRange:
     end_search_end: Optional[int] = None    # End of end search range
     searching_end: bool = False  # Flag for end search mode
     added: bool = False  # Whether this range has been added to segments
+    stall_count: int = 0
+    is_stalled: bool = False
+    last_midpoint: Optional[int] = None
 
     def is_resolved(self) -> bool:
-        """Check if this action search is complete"""
+        """Check if this action search is complete."""
         if self.confirmed_absent:
             return True
+        
+        # If searching for the end, resolution now depends on the search range crossing over.
+        if self.searching_end:
+            if self.end_search_start is not None and self.end_search_end is not None:
+                if self.end_search_start > self.end_search_end:
+                    return True
+        
+        # Original conditions for start search resolution and stalling still apply.
         if self.confirmed_present and self.end_found is not None:
             return True
-        # Prevent premature resolution when start_frame and end_frame cross
-        if (self.start_frame >= self.end_frame) and not self.searching_end and self.start_frame <= self.end_frame:
+        if (self.start_frame > self.end_frame) and not self.searching_end:
             return True
-        return False
+            
+        return self.is_stalled
 
     def get_start_midpoint(self) -> Optional[int]:
         """Get the midpoint frame for start boundary search"""
