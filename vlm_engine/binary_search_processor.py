@@ -9,7 +9,6 @@ from .action_boundary_detector import ActionBoundaryDetector
 from .video_frame_extractor import VideoFrameExtractor
 from .preprocessing import get_video_duration_decord, crop_black_bars_lr, is_macos_arm, preprocess_video
 from PIL import Image
-from collections import defaultdict
 import asyncio
 import logging
 from typing import Any, Dict, List, Optional
@@ -124,98 +123,24 @@ class BinarySearchProcessor:
         # postprocessing pipeline expects chronological order for proper timespan construction
         frame_results.sort(key=lambda x: x["frame_index"])
 
-        # Post-processing to enforce mutual exclusivity with prevalence priority
-        current_frame_interval = frame_interval_override if frame_interval_override is not None else 0.5
-        detected_segments = engine.get_detected_segments()
-        duration = get_video_duration_decord(video_path)
-        fps = engine.total_frames / duration if duration > 0 else 30.0
-        # Group segments by tag
-        tag_to_segments = defaultdict(list)
-        for seg in detected_segments:
-            tag_to_segments[seg["action_tag"]].append((seg["start"], seg["end"]))
-        # Calculate prevalence as occurrence count
-        tag_to_prevalence = {tag: len(segs) for tag, segs in tag_to_segments.items()}
-        # Sort tags by prevalence ascending (lower prevalence higher priority)
-        priority_tags = sorted(tag_to_prevalence, key=lambda t: tag_to_prevalence[t])
-        # Resolve overlaps
-        occupied = []
-        final_tag_to_segments = defaultdict(list)
-        def subtract_from_interval(s, e, occ):
-            remaining = [(s, e)]
-            for o_s, o_e in sorted(occ):
-                new_rem = []
-                for r_s, r_e in remaining:
-                    if r_e < o_s or r_s > o_e:
-                        new_rem.append((r_s, r_e))
-                    else:
-                        if r_s < o_s:
-                            new_rem.append((r_s, o_s - 1))
-                        if r_e > o_e:
-                            new_rem.append((o_e + 1, r_e))
-                remaining = new_rem
-            return [r for r in remaining if r[0] <= r[1]]
-        def add_to_occupied(occ, s, e):
-            if s > e:
-                return
-            i = 0
-            start = s
-            end = e
-            while i < len(occ):
-                o_s, o_e = occ[i]
-                if o_e < start - 1:
-                    i += 1
-                    continue
-                if o_s > end + 1:
-                    break
-                start = min(start, o_s)
-                end = max(end, o_e)
-                del occ[i]
-            occ.insert(i, (start, end))
-            occ.sort()
-        for tag in priority_tags:
-            for s, e in sorted(tag_to_segments[tag]):
-                remaining = subtract_from_interval(s, e, occupied)
-                final_tag_to_segments[tag].extend(remaining)
-                for rs, re in remaining:
-                    add_to_occupied(occupied, rs, re)
-        # Generate all frame results
-        frame_dict = {}
-        # Add virtual frames
-        for tag, segs in final_tag_to_segments.items():
-            for s, e in segs:
-                f = s
-                while f <= e:
-                    frame_index = float(f) / fps if use_timestamps else int(f)
-                    key = f
-                    if key not in frame_dict:
-                        frame_dict[key] = {"frame_index": frame_index, "actiondetection": [(tag, 1.0)]}
-                    f += int(fps * current_frame_interval)
-        # Adjust sampled frames
-        for fr in frame_results:
-            f_idx = fr["frame_idx"]
-            frame_index = fr["frame_index"]
-            assigned_tag = None
-            conf = 1.0
-            for tag, segs in final_tag_to_segments.items():
-                if any(s <= f_idx <= e for s, e in segs):
-                    assigned_tag = tag
-                    conf = fr["action_results"].get(tag, 1.0)
-                    break
-            actiondetection = [(assigned_tag, conf)] if assigned_tag else []
-            frame_dict[f_idx] = {"frame_index": frame_index, "actiondetection": actiondetection}
-        all_frame_results = sorted(frame_dict.values(), key=lambda x: x["frame_index"])
-        # Convert to children
+        # Convert frame results to children without post-processing
+        # Post-processing (mutual exclusivity) will be handled in the postprocessing stage
         children = []
-        for fr in all_frame_results:
+        for fr in frame_results:
             frame_index = fr["frame_index"]
-            actiondetection = fr["actiondetection"]
+            # Convert action_results to actiondetection format
+            actiondetection = []
+            for action_tag, confidence in fr["action_results"].items():
+                actiondetection.append((action_tag, confidence))
+            
             self.logger.debug(f'Creating child for frame_index: {frame_index}, actiondetection: {actiondetection}')
             result_future = await ItemFuture.create(item_future, {}, item_future.handler)
             await result_future.set_data("frame_index", frame_index)
             await result_future.set_data("actiondetection", actiondetection)
             children.append(result_future)
+        
         await item_future.set_data(item.output_names[0], children)
-        self.logger.info(f"Binary search completed: {len(children)} frames processed with {engine.api_calls_made} API calls and mutual exclusivity enforced")
+        self.logger.info(f"Binary search completed: {len(children)} frames processed with {engine.api_calls_made} API calls")
 
     def _extract_vlm_config(self, item_future: ItemFuture) -> Optional[Dict[str, Any]]:
         """Extract VLM configuration from pipeline context"""

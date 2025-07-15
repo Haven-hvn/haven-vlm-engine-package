@@ -1,6 +1,7 @@
 import logging
 import math
 from copy import deepcopy
+from collections import defaultdict
 from typing import Dict, List, Optional, Set, Any, Union, Tuple, Callable
 from pydantic import BaseModel, field_validator, ConfigDict, ValidationInfo
 
@@ -150,18 +151,17 @@ def compute_video_timespans(video_result: AIVideoResult, category_config: Dict) 
         if hasattr(video_result.metadata, 'models') and category in video_result.metadata.models and hasattr(video_result.metadata.models[category], 'frame_interval'):
             frame_interval = float(video_result.metadata.models[category].frame_interval)
 
-        toReturn[category] = {}
+        # First pass: collect all segments for mutual exclusivity enforcement
+        all_segments = []
+        tag_to_segments = defaultdict(list)
+        
         for tag, raw_timespans_list in tag_to_raw_timespans_map.items():
             if tag not in category_config[category]:
                 continue
             
-            tag_min_duration: float = format_duration_or_percent(category_config[category][tag].get('MinMarkerDuration', "12s"), video_duration)
-            if tag_min_duration <= 0:
-                continue
             tag_threshold: float = float(category_config[category][tag].get('TagThreshold', 0.5))
             tag_max_gap: float = format_duration_or_percent(category_config[category][tag].get('MaxGap', "6s"), video_duration)
-            renamed_tag: str = category_config[category][tag]['RenamedTag']
-
+            
             # Process and merge timeframes with confidence aggregation
             processed_timeframes: List[Dict] = []
             for raw_timespan_obj in raw_timespans_list:
@@ -198,23 +198,69 @@ def compute_video_timespans(video_result: AIVideoResult, category_config: Dict) 
                             'confidence_count': 1
                         })
             
-            # Create final timeframes with calculated totalConfidence
-            final_tag_timeframes: List[TimeFrame] = []
+            # Convert processed timeframes to segments for mutual exclusivity enforcement
             for tf_data in processed_timeframes:
                 tf = tf_data['obj']
-                if hasattr(tf, 'start') and hasattr(tf, 'end') and tf.end is not None and (tf.end - tf.start >= tag_min_duration):
-                    # Calculate average confidence for merged timeframes
-                    total_confidence = tf_data['confidence_sum'] / tf_data['confidence_count'] if tf_data['confidence_count'] > 0 else tf.confidence
-                    final_tag_timeframes.append(
-                        TimeFrame(
-                            start=tf.start, 
-                            end=tf.end, 
-                            totalConfidence=total_confidence
-                        )
-                    )
+                if hasattr(tf, 'start') and hasattr(tf, 'end') and tf.end is not None:
+                    segment = {
+                        'tag': tag,
+                        'start': tf.start,
+                        'end': tf.end,
+                        'confidence_sum': tf_data['confidence_sum'],
+                        'confidence_count': tf_data['confidence_count']
+                    }
+                    all_segments.append(segment)
+                    tag_to_segments[tag].append((tf.start, tf.end, tf_data))
+
+        # Apply mutual exclusivity enforcement
+        if all_segments:
+            # Calculate prevalence as occurrence count
+            tag_to_prevalence = {tag: len(segs) for tag, segs in tag_to_segments.items()}
             
-            if final_tag_timeframes:
-                toReturn[category][renamed_tag] = final_tag_timeframes
+            # Sort tags by prevalence ascending (lower prevalence higher priority)
+            priority_tags = sorted(tag_to_prevalence, key=lambda t: tag_to_prevalence[t])
+            
+            # Resolve overlaps
+            occupied = []
+            final_tag_to_segments = defaultdict(list)
+            
+            for tag in priority_tags:
+                for start, end, tf_data in sorted(tag_to_segments[tag]):
+                    remaining = _subtract_from_interval(start, end, occupied)
+                    for rs, re in remaining:
+                        final_tag_to_segments[tag].append((rs, re, tf_data))
+                        _add_to_occupied(occupied, rs, re)
+            
+            # Generate final timeframes after mutual exclusivity
+            toReturn[category] = {}
+            for tag in tag_to_segments.keys():
+                if tag not in category_config[category]:
+                    continue
+                    
+                tag_min_duration: float = format_duration_or_percent(category_config[category][tag].get('MinMarkerDuration', "12s"), video_duration)
+                if tag_min_duration <= 0:
+                    continue
+                renamed_tag: str = category_config[category][tag]['RenamedTag']
+                
+                final_tag_timeframes: List[TimeFrame] = []
+                for start, end, tf_data in final_tag_to_segments[tag]:
+                    if end - start >= tag_min_duration:
+                        # Calculate average confidence for merged timeframes
+                        total_confidence = tf_data['confidence_sum'] / tf_data['confidence_count'] if tf_data['confidence_count'] > 0 else 1.0
+                        final_tag_timeframes.append(
+                            TimeFrame(
+                                start=start, 
+                                end=end, 
+                                totalConfidence=total_confidence
+                            )
+                        )
+                
+                if final_tag_timeframes:
+                    toReturn[category][renamed_tag] = final_tag_timeframes
+        else:
+            # Fallback to original logic if no segments
+            toReturn[category] = {}
+            
     return toReturn
 
 def compute_video_tags(video_result: AIVideoResult, category_config: Dict) -> Tuple[Dict[str, List[str]], Dict[str, Dict[str, float]]]:
@@ -265,3 +311,46 @@ def format_duration_or_percent(value: Union[str, float, int], video_duration: fl
         if value.endswith('%'):
             return video_duration * (float(value[:-1]) / 100.0)
     return 0.0
+
+
+def _subtract_from_interval(s: int, e: int, occupied: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """
+    Helper function to subtract occupied intervals from a given interval.
+    Returns list of remaining non-overlapping intervals.
+    """
+    remaining = [(s, e)]
+    for o_s, o_e in sorted(occupied):
+        new_rem = []
+        for r_s, r_e in remaining:
+            if r_e < o_s or r_s > o_e:
+                new_rem.append((r_s, r_e))
+            else:
+                if r_s < o_s:
+                    new_rem.append((r_s, o_s - 1))
+                if r_e > o_e:
+                    new_rem.append((o_e + 1, r_e))
+        remaining = new_rem
+    return [r for r in remaining if r[0] <= r[1]]
+
+
+def _add_to_occupied(occupied: List[Tuple[int, int]], s: int, e: int) -> None:
+    """
+    Helper function to add an interval to the occupied list, merging overlapping intervals.
+    """
+    if s > e:
+        return
+    i = 0
+    start = s
+    end = e
+    while i < len(occupied):
+        o_s, o_e = occupied[i]
+        if o_e < start - 1:
+            i += 1
+            continue
+        if o_s > end + 1:
+            break
+        start = min(start, o_s)
+        end = max(end, o_e)
+        del occupied[i]
+    occupied.insert(i, (start, end))
+    occupied.sort()
