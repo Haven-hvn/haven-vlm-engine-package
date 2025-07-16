@@ -101,9 +101,10 @@ class ParallelBinarySearchEngine:
         # Update instance variables to reflect adaptive values
         self.window_size_sec = window_size_sec
         self.window_overlap_sec = window_overlap_sec
+        min_window_frames = 10
         
         window_size_frames = max(
-            self.min_window_frames, 
+            min_window_frames, 
             int(self.window_size_sec * fps)
         )
         window_step = max(
@@ -119,7 +120,7 @@ class ParallelBinarySearchEngine:
         start = 0
         while start < total_frames:
             end = min(start + window_size_frames, total_frames - 1)
-            if end - start + 1 >= self.min_window_frames:
+            if end - start + 1 >= min_window_frames:
                 windows.append({"start": start, "end": end, "id": len(windows)})
             start += adjusted_step
         
