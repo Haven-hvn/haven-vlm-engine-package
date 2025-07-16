@@ -554,4 +554,96 @@ class ParallelBinarySearchEngine:
         
         for action_range in self.action_ranges:
             if action_range.confirmed_present and action_range.start_found is not None:
-                start_identifier = float(action_range.start_found) / fps if use_tim
+                start_identifier = float(action_range.start_found) / fps if use_timestamps else int(action_range.start_found)
+                
+                # Use end_found if available, otherwise use start_found for single-frame actions
+                end_frame = action_range.end_found if action_range.end_found is not None else action_range.start_found
+                end_identifier = float(end_frame) / fps if use_timestamps else int(end_frame)
+                
+                segment = {
+                    "action_tag": action_range.action_tag,
+                    "start_frame": start_identifier,
+                    "end_frame": end_identifier,
+                    "duration": float(end_identifier - start_identifier),
+                    "complete": action_range.is_resolved()
+                }
+                segments.append(segment)
+        
+        return segments
+    
+    def _generate_action_segments(self, fps: float, use_timestamps: bool) -> List[Dict[str, Any]]:
+        """Generate action segment results with start and end frame information"""
+        segments = []
+        
+        for action_range in self.action_ranges:
+            if action_range.confirmed_present and action_range.start_found is not None:
+                start_identifier = float(action_range.start_found) / fps if use_timestamps else int(action_range.start_found)
+                
+                # If end_found is not set, but the action is resolved, it's a single-frame action.
+                end_frame = action_range.end_found if action_range.end_found is not None else action_range.start_found
+                end_identifier = float(end_frame) / fps if use_timestamps else int(end_frame)
+                
+                segment = {
+                    "action_tag": action_range.action_tag,
+                    "start_frame": start_identifier,
+                    "end_frame": end_identifier,
+                    "duration": float(end_identifier - start_identifier),
+                    "complete": action_range.is_resolved() # A segment is complete if the range is resolved.
+                }
+                segments.append(segment)
+        
+        return segments
+    
+    def _cache_vlm_result(self, cache_key: Tuple[str, int], action_results: Dict[str, float]) -> None:
+        """Cache VLM analysis result with size limit management"""
+        if len(self.vlm_cache) >= self.vlm_cache_size_limit:
+            # Remove oldest entry (simple FIFO eviction)
+            oldest_key = next(iter(self.vlm_cache))
+            del self.vlm_cache[oldest_key]
+            self.logger.debug(f"Evicted cached VLM result for frame {oldest_key[1]} from {oldest_key[0]}")
+        
+        # Store a copy of the results to avoid reference issues
+        self.vlm_cache[cache_key] = action_results.copy()
+        self.logger.debug(f"Cached VLM result for frame {cache_key[1]} from {cache_key[0]}")
+    
+    def clear_vlm_cache(self) -> None:
+        """Clear the VLM analysis cache"""
+        self.vlm_cache.clear()
+        self.logger.debug("VLM analysis cache cleared")
+    
+    def _convert_tensor_to_pil(self, frame_tensor: torch.Tensor) -> Optional[Image.Image]:
+        """Convert frame tensor to PIL Image for VLM processing"""
+        try:
+            if frame_tensor.is_cuda:
+                frame_tensor = frame_tensor.cpu()
+            
+            # Convert to numpy
+            if frame_tensor.dtype in (torch.float16, torch.float32):
+                frame_np = frame_tensor.numpy()
+                if frame_np.max() <= 1.0:
+                    frame_np = (frame_np * 255).astype(np.uint8)
+                else:
+                    frame_np = frame_np.astype(np.uint8)
+            else:
+                frame_np = frame_tensor.numpy().astype(np.uint8)
+            
+            # Ensure correct shape (H, W, C)
+            if frame_np.ndim == 3 and frame_np.shape[0] == 3:
+                frame_np = np.transpose(frame_np, (1, 2, 0))
+            
+            return Image.fromarray(frame_np)
+        except Exception as e:
+            self.logger.error(f"Failed to convert tensor to PIL: {e}")
+            return None
+
+    def get_detected_segments(self) -> List[Dict[str, Any]]:
+        """Get all detected action segments"""
+        segments = []
+        for action_range in self.action_ranges:
+            if action_range.confirmed_present and action_range.start_found is not None and action_range.is_resolved():
+                segments.append({
+                    "action_tag": action_range.action_tag,
+                    "start": action_range.start_found,
+                    "end": action_range.end_found if action_range.end_found is not None else action_range.start_found
+                })
+        return segments
