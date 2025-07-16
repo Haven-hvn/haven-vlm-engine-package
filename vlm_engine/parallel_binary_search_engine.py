@@ -1,6 +1,6 @@
 """
-Main engine implementing hybrid linear scan + binary search for action detection.
-Replaces pure binary search with a more reliable two-phase process.
+Main engine implementing sliding window + binary search for action detection.
+Replaces linear scan with sliding window technique for better action segmentation.
 """
 
 import asyncio
@@ -28,8 +28,8 @@ except ImportError:
 
 class ParallelBinarySearchEngine:
     """
-    Main engine implementing hybrid linear scan + binary search for action detection.
-    Uses a two-phase approach: linear scan for action starts, then binary search for action ends.
+    Main engine implementing sliding window + binary search for action detection.
+    Uses sliding windows for detection, then binary search within windows for precision.
     """
     
     def __init__(
@@ -50,31 +50,15 @@ class ParallelBinarySearchEngine:
         
         # Search state
         self.action_ranges: List[ActionRange] = []
-        self.candidate_segments: List[Dict[str, Any]] = []  # Results from Phase 1
+        self.candidate_windows: List[Dict[str, Any]] = []  # Windows with detected actions
         self.total_frames = 0
         self.api_calls_made = 0
         
         # VLM analysis result caching
         self.vlm_cache: Dict[Tuple[str, int], Dict[str, float]] = {}
-        self.vlm_cache_size_limit = 200  # Cache up to 200 VLM analysis results
+        self.vlm_cache_size_limit = 200
         
         self.logger.info(f"ParallelBinarySearchEngine initialized for {len(self.action_tags)} actions")
-    
-    def initialize_search_ranges(self, total_frames: int) -> None:
-        """Initialize search ranges for all actions"""
-        self.total_frames = total_frames
-        self.action_ranges = [
-            ActionRange(
-                start_frame=0,
-                end_frame=total_frames - 1,
-                action_tag=action_tag
-            )
-            for action_tag in self.action_tags
-        ]
-        self.api_calls_made = 0
-        # Clear VLM cache for new video
-        self.vlm_cache.clear()
-        self.logger.info(f"Initialized search for {len(self.action_tags)} actions across {total_frames} frames")
     
     def has_unresolved_actions(self) -> bool:
         """Check if there are still actions being searched"""
@@ -86,20 +70,79 @@ class ParallelBinarySearchEngine:
             not action_range.is_resolved() and not action_range.has_reached_max_depth()
             for action_range in self.action_ranges
         )
-    
-    async def process_video_binary_search(
+
+    def _calculate_adaptive_window(self, total_frames: int, fps: float) -> Tuple[float, float]:
+        """Calculate adaptive window size and overlap based on video duration"""
+        duration = total_frames / fps  # Video duration in seconds
+        
+        # Duration-based scaling from 5s (minimum) to 15s (maximum)
+        min_window_size = 5.0
+        max_window_size = 40.0
+        
+        # Calculate window size using logarithmic scaling
+        window_size = math.ceil(math.log2(duration)) + 4
+        window_size = max(min_window_size, min(window_size, max_window_size))
+        
+        # Adaptive overlap ratio between 20-40% based on window size
+        overlap_ratio = 0.4 - (0.2 * (window_size - min_window_size) / (max_window_size - min_window_size))
+        window_overlap = window_size * overlap_ratio
+        
+        self.logger.info(
+            f"Adaptive windows: duration={duration:.1f}s, size={window_size:.1f}s, overlap={window_overlap:.1f}s"
+        )
+        
+        return window_size, window_overlap
+
+    def _create_sliding_windows(self, total_frames: int, fps: float) -> List[Dict[str, int]]:
+        """Create sliding windows based on adaptive duration scaling"""
+        # Calculate adaptive window parameters
+        window_size_sec, window_overlap_sec = self._calculate_adaptive_window(total_frames, fps)
+        
+        # Update instance variables to reflect adaptive values
+        self.window_size_sec = window_size_sec
+        self.window_overlap_sec = window_overlap_sec
+        
+        window_size_frames = max(
+            self.min_window_frames, 
+            int(self.window_size_sec * fps)
+        )
+        window_step = max(
+            1, 
+            int((self.window_size_sec - self.window_overlap_sec) * fps)
+        )
+        
+        # Ensure minimum 3 windows for short videos
+        max_windows = max(3, total_frames // window_step)
+        adjusted_step = max(total_frames // max_windows, window_step)
+        
+        windows = []
+        start = 0
+        while start < total_frames:
+            end = min(start + window_size_frames, total_frames - 1)
+            if end - start + 1 >= self.min_window_frames:
+                windows.append({"start": start, "end": end, "id": len(windows)})
+            start += adjusted_step
+        
+        self.logger.info(
+            f"Created {len(windows)} adaptive sliding windows "
+            f"(size={window_size_frames} frames, step={adjusted_step} frames)"
+        )
+        return windows
+
+    async def process_video_sliding_window(
         self, 
         video_path: str, 
         vlm_analyze_function,
-        frame_interval: float = 1.0, # Now represents the scan_frame_step in phase 1
+        window_size_sec: float = None,  # Changed to None to allow adaptive sizing
+        window_overlap_sec: float = None,
         use_timestamps: bool = False,
         max_concurrent_vlm_calls: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        Execute hybrid linear scan + binary search across the video with concurrent VLM processing.
+        Execute sliding window detection with binary search refinement.
         
-        Phase 1: Linear scan to find candidate action starts
-        Phase 2: Parallel binary search to refine action ends
+        Phase 1: Process sliding windows to find action presence
+        Phase 2: Binary search within positive windows for precise boundaries
         
         Returns frame results compatible with existing postprocessing.
         """
@@ -124,41 +167,48 @@ class ParallelBinarySearchEngine:
             self.logger.error(f"Invalid video metadata: {total_frames} frames, {fps} fps")
             raise ValueError(f"Invalid video metadata: {total_frames} frames, {fps} fps")
         
-        self.logger.info(f"Starting hybrid linear scan + binary search on video: {total_frames} frames @ {fps} fps")
+        self.logger.info(f"Starting sliding window detection: {total_frames} frames @ {fps} fps")
         self.total_frames = total_frames
         self.api_calls_made = 0
         self.vlm_cache.clear()
         
+        # Use adaptive window sizing if parameters are not explicitly provided
+        if window_size_sec is not None and window_overlap_sec is not None:
+            # Explicit parameters override adaptive sizing
+            self.window_size_sec = window_size_sec
+            self.window_overlap_sec = window_overlap_sec
+            self.logger.info(f"Using explicit window parameters: {window_size_sec}s, overlap {window_overlap_sec}s")
+        
         # Create semaphore to limit concurrent VLM calls
         vlm_semaphore = asyncio.Semaphore(max_concurrent_vlm_calls)
         
-        # PHASE 1: Linear scan to find candidate action starts
-        self.logger.info(f"Phase 1: Linear scan with frame step {frame_interval}")
-        candidate_segments = await self._phase1_linear_scan(
-            video_path, vlm_analyze_function, vlm_semaphore, total_frames, fps, use_timestamps, frame_interval
+        # PHASE 1: Sliding window detection
+        windows = self._create_sliding_windows(total_frames, fps)
+        self.candidate_windows = await self._phase1_sliding_window_detection(
+            video_path, vlm_analyze_function, vlm_semaphore, windows, fps, use_timestamps
         )
         
-        # PHASE 2: Parallel binary search to refine action ends
-        self.logger.info(f"Phase 2: Binary search for {len(candidate_segments)} candidate segments")
-        processed_frame_data = await self._phase2_binary_search(
-            video_path, vlm_analyze_function, vlm_semaphore, candidate_segments, total_frames, fps, use_timestamps
+        # PHASE 2: Binary search within detected windows
+        self.logger.info(f"Phase 2: Binary search for {len(self.candidate_windows)} candidate windows")
+        processed_frame_data = await self._phase2_binary_search_within_windows(
+            video_path, vlm_analyze_function, vlm_semaphore, fps, use_timestamps
         )
         
         frame_results = list(processed_frame_data.values())
         
-        # Generate action segment results with start/end frame information
-        action_segments = self._generate_action_segments_from_candidates(fps, use_timestamps)
+        # Generate action segment results
+        action_segments = self._generate_action_segments_from_windows(fps, use_timestamps)
         
-        # Log performance metrics and action segment summary
-        linear_calls = self.total_frames // max(1, int(fps * 0.5))  # Estimate linear approach
-        efficiency = ((linear_calls - self.api_calls_made) / linear_calls * 100) if linear_calls > 0 else 0
+        # Log statistics
+        total_vlm_calls = self.api_calls_made
+        total_possible_calls = total_frames * len(self.action_tags)
+        efficiency = ((total_possible_calls - total_vlm_calls) / total_possible_calls * 100) if total_possible_calls > 0 else 0
         
         self.logger.info(
-            f"Hybrid scan completed: {self.api_calls_made} API calls "
-            f"(vs ~{linear_calls} linear), {efficiency:.1f}% reduction"
+            f"Sliding window detection completed: {total_vlm_calls} API calls "
+            f"(vs {total_possible_calls} full scan), {efficiency:.1f}% reduction"
         )
         
-        # Log detected action segments
         if action_segments:
             self.logger.info(f"Detected {len(action_segments)} action segments:")
             for segment in action_segments:
@@ -166,165 +216,162 @@ class ParallelBinarySearchEngine:
                 self.logger.info(f"  {segment['action_tag']}: frames {segment['start_frame']}-{segment['end_frame']} ({duration} frames)")
         
         return frame_results
-    
-    async def _phase1_linear_scan(
+
+    async def _phase1_sliding_window_detection(
         self,
         video_path: str,
         vlm_analyze_function,
         vlm_semaphore: asyncio.Semaphore,
-        total_frames: int,
+        windows: List[Dict[str, int]],
         fps: float,
-        use_timestamps: bool,
-        frame_interval: float # Frame interval for linear scan
+        use_timestamps: bool
     ) -> List[Dict[str, Any]]:
-        """
-        Phase 1: Linear scan to find candidate action starts.
-        
-        Process frames at regular intervals to detect when actions transition from absent to present.
-        """
-        candidate_segments = []
+        """Phase 1: Process each sliding window to detect action presence"""
+        candidate_windows = []
         processed_frame_data = {}
         
-        # Track last known state for each action to detect transitions
-        last_action_states = {action_tag: False for action_tag in self.action_tags}
-        
-        # Sample frames at regular intervals. Convert frame_interval from seconds to frames.
-        # Ensure frame_step is at least 1 frame.
-        frame_step_frames = max(1, int(frame_interval * fps)) * 2
-        scan_frames = list(range(0, total_frames, frame_step_frames))
-        if scan_frames[-1] != total_frames - 1:
-            scan_frames.append(total_frames - 1)  # Always include the last frame
-        
-        self.logger.info(f"Phase 1: Scanning {len(scan_frames)} frames (every {frame_step_frames} frames)")
-        
-        # Process frames concurrently
-        async def process_scan_frame(frame_idx: int) -> Optional[Dict[str, Any]]:
-            """Process a single frame in the linear scan"""
+        async def process_window(window: Dict[str, int]) -> List[Dict[str, Any]]:
+            """Process a single window and return detected actions"""
             async with vlm_semaphore:
                 try:
-                    # Check VLM cache first
-                    vlm_cache_key = (video_path, frame_idx)
-                    if vlm_cache_key in self.vlm_cache:
-                        action_results = self.vlm_cache[vlm_cache_key]
-                        self.logger.debug(f"VLM cache hit for frame {frame_idx}")
-                    else:
-                        # Extract frame
-                        frame_tensor = self.frame_extractor.extract_frame(video_path, frame_idx)
-                        if frame_tensor is None:
-                            self.logger.warning(f"Failed to extract frame {frame_idx}")
-                            return None
-                        
-                        # Convert to PIL for VLM processing
-                        frame_pil = self._convert_tensor_to_pil(frame_tensor)
-                        if frame_pil is None:
-                            return None
-                        
-                        # Analyze frame with VLM
-                        action_results = await vlm_analyze_function(frame_pil)
-                        self.api_calls_made += 1
-                        
-                        # Cache the VLM analysis result
-                        self._cache_vlm_result(vlm_cache_key, action_results)
+                    # Sample frames within this window
+                    start, end = window["start"], window["end"]
+                    sample_positions = []
                     
-                    # Store frame result for postprocessing compatibility
-                    frame_identifier = float(frame_idx) / fps if use_timestamps else int(frame_idx)
-                    return {
-                        "frame_index": frame_identifier,
-                        "frame_idx": frame_idx,
-                        "action_results": action_results,
-                        "actiondetection": [
-                            (tag, confidence) for tag, confidence in action_results.items()
-                            if confidence >= self.threshold
-                        ]
-                    }
+                    # Sample at start, middle, and end positions
+                    positions = [start, (start + end) // 2, end]
+                    
+                    action_presence = {action: False for action in self.action_tags}
+                    confidences = {action: 0.0 for action in self.action_tags}
+                    
+                    for frame_idx in positions:
+                        # Check cache
+                        vlm_cache_key = (video_path, frame_idx)
+                        if vlm_cache_key in self.vlm_cache:
+                            action_results = self.vlm_cache[vlm_cache_key]
+                        else:
+                            # Extract and analyze
+                            frame_tensor = self.frame_extractor.extract_frame(video_path, frame_idx)
+                            if frame_tensor is None:
+                                continue
+                            
+                            frame_pil = self._convert_tensor_to_pil(frame_tensor)
+                            if frame_pil is None:
+                                continue
+                            
+                            action_results = await vlm_analyze_function(frame_pil)
+                            self.api_calls_made += 1
+                            self._cache_vlm_result(vlm_cache_key, action_results)
+                        
+                        # Track frame results
+                        frame_identifier = float(frame_idx) / fps if use_timestamps else int(frame_idx)
+                        processed_frame_data[frame_idx] = {
+                            "frame_index": frame_identifier,
+                            "frame_idx": frame_idx,
+                            "action_results": action_results,
+                            "actiondetection": [
+                                (tag, conf) for tag, conf in action_results.items()
+                                if conf >= self.threshold
+                            ]
+                        }
+                        
+                        # Update action presence based on any threshold pass
+                        for action_tag in self.action_tags:
+                            confidence = action_results.get(action_tag, 0.0)
+                            if confidence >= self.threshold:
+                                action_presence[action_tag] = True
+                                confidences[action_tag] = max(confidences[action_tag], confidence)
+                    
+                    # Create window results
+                    detected_actions = []
+                    for action_tag in self.action_tags:
+                        if action_presence[action_tag]:
+                            detected_actions.append({
+                                "action_tag": action_tag,
+                                "window": window,
+                                "confidence": confidences[action_tag],
+                                "start_frame": window["start"],
+                                "end_frame": window["end"]
+                            })
+                    
+                    return detected_actions
                     
                 except Exception as e:
-                    self.logger.error(f"VLM analysis failed for frame {frame_idx}: {e}")
-                    return None
+                    self.logger.error(f"Window processing failed for window {window}: {e}")
+                    return []
         
-        # Process all scan frames concurrently
-        frame_tasks = [process_scan_frame(frame_idx) for frame_idx in scan_frames]
-        concurrent_results = await asyncio.gather(*frame_tasks, return_exceptions=True)
+        # Process all windows concurrently
+        window_tasks = [process_window(window) for window in windows]
+        concurrent_results = await asyncio.gather(*window_tasks, return_exceptions=True)
         
-        # Analyze results to detect action transitions
-        for i, result in enumerate(concurrent_results):
-            if isinstance(result, Exception) or result is None:
-                continue
-                
-            frame_idx = result["frame_idx"]
-            action_results = result["action_results"]
-            
-            # Store processed frame data
-            processed_frame_data[frame_idx] = result
-            
-            # Check for action transitions (absent -> present)
-            for action_tag in self.action_tags:
-                confidence = action_results.get(action_tag, 0.0)
-                is_present = confidence >= self.threshold
-                
-                # If action transitioned from absent to present, mark as candidate start
-                if not last_action_states[action_tag] and is_present:
-                    candidate_segments.append({
-                        "action_tag": action_tag,
-                        "start_frame": frame_idx,
-                        "end_frame": None,  # To be determined in Phase 2
-                        "confidence": confidence
-                    })
-                    self.logger.debug(f"Found candidate start for '{action_tag}' at frame {frame_idx}")
-                
-                # Update last known state
-                last_action_states[action_tag] = is_present
+        # Collect all detected actions
+        for window_result in concurrent_results:
+            if isinstance(window_result, list):
+                candidate_windows.extend(window_result)
         
-        # Store candidate segments for Phase 2
-        self.candidate_segments = candidate_segments
-        
-        self.logger.info(f"Phase 1 complete: Found {len(candidate_segments)} candidate action segments")
-        return candidate_segments
-    
-    async def _phase2_binary_search(
+        self.logger.info(f"Phase 1 complete: {len(candidate_windows)} candidate windows detected")
+        return candidate_windows
+
+    async def _phase2_binary_search_within_windows(
         self,
         video_path: str,
         vlm_analyze_function,
         vlm_semaphore: asyncio.Semaphore,
-        candidate_segments: List[Dict[str, Any]],
-        total_frames: int,
         fps: float,
         use_timestamps: bool
     ) -> Dict[int, Dict[str, Any]]:
-        """
-        Phase 2: Parallel binary search to refine action ends.
-        
-        For each candidate segment, perform binary search to find the exact end frame.
-        """
+        """Phase 2: Binary search within each positive window for precise boundaries"""
         processed_frame_data = {}
         
-        if not candidate_segments:
-            self.logger.info("No candidate segments found, skipping Phase 2")
+        if not self.candidate_windows:
+            self.logger.info("No candidate windows, skipping Phase 2")
             return processed_frame_data
         
-        # Initialize action ranges for binary search
+        # Group windows by action tag for efficient processing
+        action_windows = {}
+        for window_info in self.candidate_windows:
+            action_tag = window_info["action_tag"]
+            if action_tag not in action_windows:
+                action_windows[action_tag] = []
+            action_windows[action_tag].append(window_info)
+        
+        # Create action ranges for each detected action
         self.action_ranges = []
-        for segment in candidate_segments:
+        for action_tag, windows in action_windows.items():
+            # Merge overlapping windows for this action
+            windows.sort(key=lambda x: x["start_frame"])
+            merged_window = {
+                "start_frame": min(w["start_frame"] for w in windows),
+                "end_frame": max(w["end_frame"] for w in windows)
+            }
+            
             action_range = ActionRange(
-                start_frame=segment["start_frame"],
-                end_frame=total_frames - 1,
-                action_tag=segment["action_tag"]
+                start_frame=merged_window["start_frame"],
+                end_frame=merged_window["end_frame"],
+                action_tag=action_tag
             )
-            # Mark as confirmed present and set start_found
             action_range.confirmed_present = True
-            action_range.start_found = segment["start_frame"]
-            action_range.initiate_end_search(total_frames)
-            # Reset depth counter for end search
+            action_range.start_found = merged_window["start_frame"]
+            action_range.initiate_end_search(merged_window["end_frame"])
             action_range.reset_depth_for_end_search()
             self.action_ranges.append(action_range)
         
-        # Log per-action depth information
-        for action_range in self.action_ranges:
-            search_range = action_range.end_search_end - action_range.end_search_start + 1 if action_range.end_search_end and action_range.end_search_start else 0
-            self.logger.info(f"Action '{action_range.action_tag}': max_depth={action_range.max_depth}, search_range={search_range}")
+        return await self._perform_binary_search_within_ranges(
+            video_path, vlm_analyze_function, vlm_semaphore, fps, use_timestamps, processed_frame_data
+        )
+
+    async def _perform_binary_search_within_ranges(
+        self,
+        video_path: str,
+        vlm_analyze_function,
+        vlm_semaphore: asyncio.Semaphore,
+        fps: float,
+        use_timestamps: bool,
+        processed_frame_data: Dict[int, Dict[str, Any]]
+    ) -> Dict[int, Dict[str, Any]]:
+        """Perform binary search refined within action ranges"""
         
         iteration = 0
-        
         while self.has_unresolved_actions() and self._has_actions_within_depth_limit():
             iteration += 1
             
@@ -334,59 +381,47 @@ class ParallelBinarySearchEngine:
                     if (action_range.end_search_start is not None and 
                         action_range.end_search_end is not None and
                         action_range.end_search_end - action_range.end_search_start <= 1):
-                        self.logger.debug(f"Binary search window collapsed for {action_range.action_tag}, resolving")
                         action_range.is_stalled = True
             
-            # Collect midpoints for binary search
+            # Collect midpoints for binary search within ranges
             midpoints = self.midpoint_collector.collect_unique_midpoints(self.action_ranges)
             
             if not midpoints:
-                self.logger.debug("No midpoints to process, ending Phase 2")
                 break
             
-            # Filter out already processed midpoints
+            # Filter unprocessed midpoints
             unprocessed_midpoints = [idx for idx in midpoints if idx not in processed_frame_data]
             
             if not unprocessed_midpoints:
-                # Re-apply existing results to advance search ranges
+                # Re-apply existing results
                 for frame_idx in midpoints:
                     if frame_idx in processed_frame_data:
                         action_results = processed_frame_data[frame_idx]["action_results"]
                         self.boundary_detector.update_action_boundaries(
-                            self.action_ranges, frame_idx, action_results, total_frames
+                            self.action_ranges, frame_idx, action_results, self.total_frames
                         )
                 continue
             
-            # Process unprocessed midpoints
+            # Process new midpoints
             async def process_midpoint_frame(frame_idx: int) -> Optional[Dict[str, Any]]:
-                """Process a single frame in the binary search"""
                 async with vlm_semaphore:
                     try:
-                        # Check VLM cache first
                         vlm_cache_key = (video_path, frame_idx)
                         if vlm_cache_key in self.vlm_cache:
                             action_results = self.vlm_cache[vlm_cache_key]
-                            self.logger.debug(f"VLM cache hit for frame {frame_idx}")
                         else:
-                            # Extract frame
                             frame_tensor = self.frame_extractor.extract_frame(video_path, frame_idx)
                             if frame_tensor is None:
-                                self.logger.warning(f"Failed to extract frame {frame_idx}")
                                 return None
                             
-                            # Convert to PIL for VLM processing
                             frame_pil = self._convert_tensor_to_pil(frame_tensor)
                             if frame_pil is None:
                                 return None
                             
-                            # Analyze frame with VLM
                             action_results = await vlm_analyze_function(frame_pil)
                             self.api_calls_made += 1
-                            
-                            # Cache the VLM analysis result
                             self._cache_vlm_result(vlm_cache_key, action_results)
                         
-                        # Store frame result for postprocessing compatibility
                         frame_identifier = float(frame_idx) / fps if use_timestamps else int(frame_idx)
                         return {
                             "frame_index": frame_identifier,
@@ -399,14 +434,12 @@ class ParallelBinarySearchEngine:
                         }
                         
                     except Exception as e:
-                        self.logger.error(f"VLM analysis failed for frame {frame_idx}: {e}")
+                        self.logger.error(f"Frame processing failed: {e}")
                         return None
             
-            # Process all midpoint frames concurrently
             frame_tasks = [process_midpoint_frame(frame_idx) for frame_idx in unprocessed_midpoints]
             concurrent_results = await asyncio.gather(*frame_tasks, return_exceptions=True)
             
-            # Process results and update boundaries
             for i, result in enumerate(concurrent_results):
                 if isinstance(result, Exception) or result is None:
                     continue
@@ -414,37 +447,23 @@ class ParallelBinarySearchEngine:
                 frame_idx = result["frame_idx"]
                 action_results = result["action_results"]
                 
-                # Update action boundaries based on this frame's results
                 self.boundary_detector.update_action_boundaries(
-                    self.action_ranges, frame_idx, action_results, total_frames
+                    self.action_ranges, frame_idx, action_results, self.total_frames
                 )
                 
-                # Store frame result
                 processed_frame_data[frame_idx] = result
-        
-        # Log per-action completion status
-        for action_range in self.action_ranges:
-            if action_range.is_resolved():
-                completion_reason = "boundary found"
-            elif action_range.has_reached_max_depth():
-                completion_reason = f"max depth {action_range.max_depth} reached"
-            else:
-                completion_reason = "still searching"
-            
-            self.logger.info(f"Action '{action_range.action_tag}': depth {action_range.current_depth}/{action_range.max_depth}, {completion_reason}")
         
         self.logger.info(f"Phase 2 complete: Processed {len(processed_frame_data)} frames in {iteration} iterations")
         return processed_frame_data
-    
-    def _generate_action_segments_from_candidates(self, fps: float, use_timestamps: bool) -> List[Dict[str, Any]]:
-        """Generate action segment results from candidate segments and refined boundaries"""
+
+    def _generate_action_segments_from_windows(self, fps: float, use_timestamps: bool) -> List[Dict[str, Any]]:
+        """Generate action segment results from refined window boundaries"""
         segments = []
         
         for action_range in self.action_ranges:
             if action_range.confirmed_present and action_range.start_found is not None:
                 start_identifier = float(action_range.start_found) / fps if use_timestamps else int(action_range.start_found)
                 
-                # Use end_found if available, otherwise use start_found for single-frame actions
                 end_frame = action_range.end_found if action_range.end_found is not None else action_range.start_found
                 end_identifier = float(end_frame) / fps if use_timestamps else int(end_frame)
                 
@@ -458,42 +477,23 @@ class ParallelBinarySearchEngine:
                 segments.append(segment)
         
         return segments
-    
-    def _generate_action_segments(self, fps: float, use_timestamps: bool) -> List[Dict[str, Any]]:
-        """Generate action segment results with start and end frame information"""
-        segments = []
-        
-        for action_range in self.action_ranges:
-            if action_range.confirmed_present and action_range.start_found is not None:
-                start_identifier = float(action_range.start_found) / fps if use_timestamps else int(action_range.start_found)
-                
-                # If end_found is not set, but the action is resolved, it's a single-frame action.
-                end_frame = action_range.end_found if action_range.end_found is not None else action_range.start_found
-                end_identifier = float(end_frame) / fps if use_timestamps else int(end_frame)
-                
-                segment = {
-                    "action_tag": action_range.action_tag,
-                    "start_frame": start_identifier,
-                    "end_frame": end_identifier,
-                    "duration": float(end_identifier - start_identifier),
-                    "complete": action_range.is_resolved() # A segment is complete if the range is resolved.
-                }
-                segments.append(segment)
-        
-        return segments
-    
+
+    # Backward compatibility - keep original methods working but mark as deprecated
+    async def process_video_binary_search(self, *args, **kwargs):
+        """Backward compatibility method - delegates to sliding window"""
+        self.logger.warning("process_video_binary_search is deprecated, use process_video_sliding_window")
+        return await self.process_video_sliding_window(*args, **kwargs)
+
+    # Existing utility methods remain unchanged
     def _cache_vlm_result(self, cache_key: Tuple[str, int], action_results: Dict[str, float]) -> None:
         """Cache VLM analysis result with size limit management"""
         if len(self.vlm_cache) >= self.vlm_cache_size_limit:
-            # Remove oldest entry (simple FIFO eviction)
             oldest_key = next(iter(self.vlm_cache))
             del self.vlm_cache[oldest_key]
-            self.logger.debug(f"Evicted cached VLM result for frame {oldest_key[1]} from {oldest_key[0]}")
+            self.logger.debug(f"Evicted cached VLM result for frame {oldest_key[1]}")
         
-        # Store a copy of the results to avoid reference issues
         self.vlm_cache[cache_key] = action_results.copy()
-        self.logger.debug(f"Cached VLM result for frame {cache_key[1]} from {cache_key[0]}")
-    
+
     def clear_vlm_cache(self) -> None:
         """Clear the VLM analysis cache"""
         self.vlm_cache.clear()
@@ -505,7 +505,6 @@ class ParallelBinarySearchEngine:
             if frame_tensor.is_cuda:
                 frame_tensor = frame_tensor.cpu()
             
-            # Convert to numpy
             if frame_tensor.dtype in (torch.float16, torch.float32):
                 frame_np = frame_tensor.numpy()
                 if frame_np.max() <= 1.0:
@@ -515,7 +514,6 @@ class ParallelBinarySearchEngine:
             else:
                 frame_np = frame_tensor.numpy().astype(np.uint8)
             
-            # Ensure correct shape (H, W, C)
             if frame_np.ndim == 3 and frame_np.shape[0] == 3:
                 frame_np = np.transpose(frame_np, (1, 2, 0))
             
