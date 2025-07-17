@@ -137,25 +137,29 @@ class VideoFrameExtractor:
     def _extract_frame_decord(self, video_path: str, frame_idx: int) -> Optional[torch.Tensor]:
         """Extract frame using decord"""
         try:
-            self.vr = decord.VideoReader(video_path, ctx=decord.cpu(0), readahead=False)  # Disable preloading
-            if frame_idx >= len(self.vr):
-                self.logger.warning(f"Frame index {frame_idx} exceeds video length {len(self.vr)}")
+            vr = decord.VideoReader(video_path, ctx=decord.cpu(0))  # No readahead for 0.6.0
+            self.logger.debug(f'Created VideoReader for {video_path}')
+            if frame_idx >= len(vr):
+                self.logger.warning(f"Frame index {frame_idx} exceeds video length {len(vr)}")
+                del vr
                 return None
             
-            frame = self.vr[frame_idx]
-            if not isinstance(frame, torch.Tensor):
-                frame = torch.from_numpy(frame.asnumpy())
+            frame_cpu = vr[frame_idx]
+            if not isinstance(frame_cpu, torch.Tensor):
+                frame_cpu = torch.from_numpy(frame_cpu.asnumpy())
             
-            frame = crop_black_bars_lr(frame)
-            frame = frame.to(self.device)
+            frame_cpu = crop_black_bars_lr(frame_cpu)
+            frame = frame_cpu.to(self.device)
             
             if not torch.is_floating_point(frame):
-                frame = frame.float()
-            
+                frame = frame.float() / 255.0
             if self.use_half_precision:
                 frame = frame.half()
             
-            self.vr.clear()  # Or del self.vr and recreate if needed
+            del vr
+            self.logger.debug(f'Released VideoReader after extracting frame {frame_idx}')
+            # import gc # This line was not in the new_code, so it's removed.
+            # gc.collect() # This line was not in the new_code, so it's removed.
             return frame
         except Exception as e:
             self.logger.error(f"Decord frame extraction failed: {e}")
