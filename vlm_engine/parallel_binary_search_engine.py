@@ -61,6 +61,9 @@ class ParallelBinarySearchEngine:
         # VLM analysis result caching
         self.vlm_cache: Dict[Tuple[str, int], Dict[str, float]] = {}
         self.vlm_cache_size_limit = 200  # Cache up to 200 VLM analysis results
+        self.processed_frame_data_max = 500
+        self.ram_log = True  # Set to False to disable RAM logging
+        self.max_candidates = 100  # Warning threshold for lists
         
         self.logger.info(f"ParallelBinarySearchEngine initialized for {len(self.action_tags)} actions")
     
@@ -170,7 +173,11 @@ class ParallelBinarySearchEngine:
                         video_path, vlm_analyze_function, vlm_semaphore, segment, total_frames, fps, use_timestamps
                     )
                     processed_frame_data.update(segment_data)
-                    self.logger.info(f'RAM after segment update: {psutil.Process().memory_info().rss / 1024**2:.1f} MB')
+                    if len(processed_frame_data) > self.processed_frame_data_max:
+                        oldest_key = next(iter(processed_frame_data))
+                        del processed_frame_data[oldest_key]
+                        self.logger.debug(f'Evicted old frame data for {oldest_key} to bound memory')
+                        gc.collect()
                     gc.collect()
                 return processed_frame_data
             
@@ -186,6 +193,11 @@ class ParallelBinarySearchEngine:
             self.logger.info("No candidates, skipping Phase 1.5+2")
 
         frame_results = list(processed_frame_data.values())
+        
+        del processed_frame_data
+        gc.collect()
+        if self.ram_log:
+            self.logger.info(f'Final RAM after clearing processed data: {psutil.Process().memory_info().rss / 1024**2:.1f} MB')
         
         # Generate action segment results with start/end frame information
         action_segments = self._generate_action_segments_from_candidates(fps, use_timestamps)
@@ -398,6 +410,8 @@ class ParallelBinarySearchEngine:
         self.candidate_segments = candidate_segments
         
         self.logger.info(f"Phase 1 complete: Found {len(candidate_segments)} candidate action segments")
+        if len(candidate_segments) > self.max_candidates:
+            self.logger.warning(f'Too many candidate segments ({len(candidate_segments)}), consider adjusting sampling or filtering')
         return candidate_segments
     
     async def _phase2_binary_search(
@@ -547,6 +561,8 @@ class ParallelBinarySearchEngine:
             self.logger.info(f"Action '{action_range.action_tag}': depth {action_range.current_depth}/{action_range.max_depth}, {completion_reason}")
         
         self.logger.info(f"Phase 2 complete: Processed {len(processed_frame_data)} frames in {iteration} iterations")
+        if len(self.action_ranges) > self.max_candidates:
+            self.logger.warning(f'Too many action ranges ({len(self.action_ranges)}), potential performance issue')
         return processed_frame_data
     
     def _generate_action_segments_from_candidates(self, fps: float, use_timestamps: bool) -> List[Dict[str, Any]]:
@@ -606,6 +622,7 @@ class ParallelBinarySearchEngine:
         # Store a copy of the results to avoid reference issues
         self.vlm_cache[cache_key] = action_results.copy()
         self.logger.debug(f"Cached VLM result for frame {cache_key[1]} from {cache_key[0]}")
+        gc.collect()
     
     def clear_vlm_cache(self) -> None:
         """Clear the VLM analysis cache"""
