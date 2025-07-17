@@ -137,17 +137,17 @@ class VideoFrameExtractor:
     def _extract_frame_decord(self, video_path: str, frame_idx: int) -> Optional[torch.Tensor]:
         """Extract frame using decord"""
         try:
-            vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
-            if frame_idx >= len(vr):
-                self.logger.warning(f"Frame index {frame_idx} exceeds video length {len(vr)}")
+            self.vr = decord.VideoReader(video_path, ctx=decord.cpu(0), readahead=False)  # Disable preloading
+            if frame_idx >= len(self.vr):
+                self.logger.warning(f"Frame index {frame_idx} exceeds video length {len(self.vr)}")
                 return None
             
-            frame_cpu = vr[frame_idx]
-            if not isinstance(frame_cpu, torch.Tensor):
-                frame_cpu = torch.from_numpy(frame_cpu.asnumpy())
+            frame = self.vr[frame_idx]
+            if not isinstance(frame, torch.Tensor):
+                frame = torch.from_numpy(frame.asnumpy())
             
-            frame_cpu = crop_black_bars_lr(frame_cpu)
-            frame = frame_cpu.to(self.device)
+            frame = crop_black_bars_lr(frame)
+            frame = frame.to(self.device)
             
             if not torch.is_floating_point(frame):
                 frame = frame.float()
@@ -155,7 +155,7 @@ class VideoFrameExtractor:
             if self.use_half_precision:
                 frame = frame.half()
             
-            del vr
+            self.vr.clear()  # Or del self.vr and recreate if needed
             return frame
         except Exception as e:
             self.logger.error(f"Decord frame extraction failed: {e}")

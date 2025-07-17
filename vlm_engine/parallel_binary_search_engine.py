@@ -13,6 +13,7 @@ from PIL import Image
 from collections import defaultdict
 import gc
 from contextlib import contextmanager
+import psutil
 
 from .action_range import ActionRange
 from .adaptive_midpoint_collector import AdaptiveMidpointCollector
@@ -169,6 +170,8 @@ class ParallelBinarySearchEngine:
                         video_path, vlm_analyze_function, vlm_semaphore, segment, total_frames, fps, use_timestamps
                     )
                     processed_frame_data.update(segment_data)
+                    self.logger.info(f'RAM after segment update: {psutil.Process().memory_info().rss / 1024**2:.1f} MB')
+                    gc.collect()
                 return processed_frame_data
             
             # Run producer and consumer concurrently
@@ -772,3 +775,4 @@ class ParallelBinarySearchEngine:
         yield frame_tensor, frame_pil
         del frame_tensor, frame_pil
         gc.collect()
+        self.logger.info(f'RAM after release for frame {frame_idx}: {psutil.Process().memory_info().rss / 1024**2:.1f} MB')
