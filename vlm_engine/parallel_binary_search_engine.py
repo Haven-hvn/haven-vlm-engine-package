@@ -10,6 +10,9 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 import torch
 import numpy as np
 from PIL import Image
+from collections import defaultdict
+import gc
+from contextlib import contextmanager
 
 from .action_range import ActionRange
 from .adaptive_midpoint_collector import AdaptiveMidpointCollector
@@ -139,25 +142,46 @@ class ParallelBinarySearchEngine:
             video_path, vlm_analyze_function, vlm_semaphore, total_frames, fps, use_timestamps, frame_interval
         )
         
-        # PHASE 1.5: Refine candidate starts with binary search
+        # PHASE 1.5 and 2: Overlap refinement and end search using queue
         if candidate_segments:
-            initial_starts = [s["start_frame"] for s in candidate_segments]
-            self.logger.info(f"Phase 1.5: Refining {len(candidate_segments)} candidate starts")
-            await self._refine_starts_backward(
-                video_path, vlm_analyze_function, vlm_semaphore, candidate_segments, total_frames
-            )
-            refined_starts = [s["start_frame"] for s in candidate_segments]
-            refinements = sum(1 for i, r in zip(initial_starts, refined_starts) if i != r)
-            self.logger.info(f"Phase 1.5 complete: {refinements} starts refined backward by binary search")
+            self.logger.info(f"Phase 1.5+2: Overlapping refinement and end search for {len(candidate_segments)} candidates")
+            
+            # Queue for refined segments (producer: 1.5, consumer: 2)
+            refinement_queue = asyncio.Queue()
+            processed_frame_data = {}  # Collect results here
+            
+            # Producer task: Refine and enqueue segments
+            async def producer():
+                refinement_tasks = [self._refine_single_start(segment, video_path, vlm_analyze_function, vlm_semaphore, total_frames) for segment in candidate_segments]
+                refined_segments = await asyncio.gather(*refinement_tasks)
+                for refined in refined_segments:
+                    await refinement_queue.put(refined)
+                await refinement_queue.put(None)  # Sentinel to signal end
+            
+            # Consumer task: Process enqueued segments for Phase 2
+            async def consumer():
+                while True:
+                    segment = await refinement_queue.get()
+                    if segment is None:
+                        break
+                    # Process this segment's end search
+                    segment_data = await self._phase2_process_single_segment(
+                        video_path, vlm_analyze_function, vlm_semaphore, segment, total_frames, fps, use_timestamps
+                    )
+                    processed_frame_data.update(segment_data)
+                return processed_frame_data
+            
+            # Run producer and consumer concurrently
+            producer_task = asyncio.create_task(producer())
+            consumer_task = asyncio.create_task(consumer())
+            
+            processed_frame_data = await consumer_task  # Back to simple await
+            
+            self.logger.info(f"Phase 1.5+2 complete: Processed {len(processed_frame_data)} frames")
         else:
-            self.logger.info("Phase 1.5 skipped: no candidate segments to refine")
-        
-        # PHASE 2: Parallel binary search to refine action ends
-        self.logger.info(f"Phase 2: Binary search for {len(candidate_segments)} refined segments")
-        processed_frame_data = await self._phase2_binary_search(
-            video_path, vlm_analyze_function, vlm_semaphore, candidate_segments, total_frames, fps, use_timestamps
-        )
-        
+            processed_frame_data = {}
+            self.logger.info("No candidates, skipping Phase 1.5+2")
+
         frame_results = list(processed_frame_data.values())
         
         # Generate action segment results with start/end frame information
@@ -235,23 +259,13 @@ class ParallelBinarySearchEngine:
                             self.logger.debug(f"VLM cache hit for refinement frame {mid}")
                         else:
                             # Extract and analyze frame
-                            frame_tensor = self.frame_extractor.extract_frame(video_path, mid)
-                            if frame_tensor is None:
-                                self.logger.warning(f"Failed to extract refinement frame {mid}")
-                                low = mid + 1
-                                continue
-                            
-                            frame_pil = self._convert_tensor_to_pil(frame_tensor)
-                            if frame_pil is None:
-                                low = mid + 1
-                                continue
-                            
-                            # Analyze with VLM
-                            action_results = await vlm_analyze_function(frame_pil)
-                            self.api_calls_made += 1
-                            
-                            # Cache result
-                            self._cache_vlm_result(vlm_cache_key, action_results)
+                            with self.temp_frame(video_path, mid) as (frame_tensor, frame_pil):
+                                if frame_pil is None:
+                                    low = mid + 1
+                                    continue
+                                action_results = await vlm_analyze_function(frame_pil)
+                                self.api_calls_made += 1
+                                self._cache_vlm_result(vlm_cache_key, action_results)
                         
                         # Check if action is present
                         confidence = action_results.get(action_tag, 0.0)
@@ -321,22 +335,12 @@ class ParallelBinarySearchEngine:
                         self.logger.debug(f"VLM cache hit for frame {frame_idx}")
                     else:
                         # Extract frame
-                        frame_tensor = self.frame_extractor.extract_frame(video_path, frame_idx)
-                        if frame_tensor is None:
-                            self.logger.warning(f"Failed to extract frame {frame_idx}")
-                            return None
-                        
-                        # Convert to PIL for VLM processing
-                        frame_pil = self._convert_tensor_to_pil(frame_tensor)
-                        if frame_pil is None:
-                            return None
-                        
-                        # Analyze frame with VLM
-                        action_results = await vlm_analyze_function(frame_pil)
-                        self.api_calls_made += 1
-                        
-                        # Cache the VLM analysis result
-                        self._cache_vlm_result(vlm_cache_key, action_results)
+                        with self.temp_frame(video_path, frame_idx) as (frame_tensor, frame_pil):
+                            if frame_pil is None:
+                                return None
+                            action_results = await vlm_analyze_function(frame_pil)
+                            self.api_calls_made += 1
+                            self._cache_vlm_result(vlm_cache_key, action_results)
                     
                     # Store frame result for postprocessing compatibility
                     frame_identifier = float(frame_idx) / fps if use_timestamps else int(frame_idx)
@@ -362,7 +366,7 @@ class ParallelBinarySearchEngine:
         for i, result in enumerate(concurrent_results):
             if isinstance(result, Exception) or result is None:
                 continue
-                
+            assert isinstance(result, dict)
             frame_idx = result["frame_idx"]
             action_results = result["action_results"]
             
@@ -481,15 +485,9 @@ class ParallelBinarySearchEngine:
                             self.logger.debug(f"VLM cache hit for frame {frame_idx}")
                         else:
                             # Extract frame
-                            frame_tensor = self.frame_extractor.extract_frame(video_path, frame_idx)
-                            if frame_tensor is None:
-                                self.logger.warning(f"Failed to extract frame {frame_idx}")
-                                return None
-                            
-                            # Convert to PIL for VLM processing
-                            frame_pil = self._convert_tensor_to_pil(frame_tensor)
-                            if frame_pil is None:
-                                return None
+                            with self.temp_frame(video_path, frame_idx) as (frame_tensor, frame_pil):
+                                if frame_pil is None:
+                                    return None
                             
                             # Analyze frame with VLM
                             action_results = await vlm_analyze_function(frame_pil)
@@ -522,7 +520,7 @@ class ParallelBinarySearchEngine:
             for i, result in enumerate(concurrent_results):
                 if isinstance(result, Exception) or result is None:
                     continue
-                
+                assert isinstance(result, dict)
                 frame_idx = result["frame_idx"]
                 action_results = result["action_results"]
                 
@@ -647,3 +645,130 @@ class ParallelBinarySearchEngine:
                     "end": action_range.end_found if action_range.end_found is not None else action_range.start_found
                 })
         return segments
+
+    async def _refine_single_start(
+        self,
+        segment: Dict[str, Any],
+        video_path: str,
+        vlm_analyze_function,
+        vlm_semaphore: asyncio.Semaphore,
+        total_frames: int
+    ) -> Dict[str, Any]:
+        """Refine start for a single segment (extracted from _refine_starts_backward for parallelism)."""
+        # (Copy the logic from refine_segment_start in _refine_starts_backward, but return the refined segment instead of modifying in-place)
+        action_tag = segment["action_tag"]
+        detected_start = segment["start_frame"]
+        
+        if detected_start <= 0:
+            self.logger.debug(f"Segment {action_tag}: start is already at frame 0")
+            return segment
+        
+        low = 0
+        high = detected_start - 1
+        refined_start = detected_start
+        
+        self.logger.debug(f"Refining {action_tag}: search range [{low}, {high}]")
+        
+        while low <= high:
+            mid = (low + high) // 2
+            vlm_cache_key = (video_path, mid)
+            
+            async with vlm_semaphore:
+                try:
+                    if vlm_cache_key in self.vlm_cache:
+                        action_results = self.vlm_cache[vlm_cache_key]
+                        self.logger.debug(f"VLM cache hit for refinement frame {mid}")
+                    else:
+                        with self.temp_frame(video_path, mid) as (frame_tensor, frame_pil):
+                            if frame_pil is None:
+                                low = mid + 1
+                                continue
+                            action_results = await vlm_analyze_function(frame_pil)
+                            self.api_calls_made += 1
+                            self._cache_vlm_result(vlm_cache_key, action_results)
+                    
+                    confidence = action_results.get(action_tag, 0.0)
+                    is_present = confidence >= self.threshold
+                    
+                    if is_present:
+                        refined_start = mid
+                        high = mid - 1
+                        self.logger.debug(f"Action present at {mid}, new refined_start={refined_start}")
+                    else:
+                        low = mid + 1
+                except Exception as e:
+                    self.logger.error(f"Error refining {action_tag} at frame {mid}: {e}")
+                    low = mid + 1
+        
+        segment["start_frame"] = refined_start
+        self.logger.debug(f"{action_tag}: refined start from {detected_start} to {refined_start}")
+        return segment
+
+    async def _phase2_process_single_segment(
+        self,
+        video_path: str,
+        vlm_analyze_function,
+        vlm_semaphore: asyncio.Semaphore,
+        segment: Dict[str, Any],
+        total_frames: int,
+        fps: float,
+        use_timestamps: bool
+    ) -> Dict[int, Dict[str, Any]]:
+        """Process end search for a single segment (subset of _phase2_binary_search)."""
+        # (Adapt logic from _phase2_binary_search for one segment: Initialize single ActionRange, run the while loop, return processed_frame_data for this segment)
+        processed_frame_data = {}
+        
+        action_range = ActionRange(
+            start_frame=segment["start_frame"],
+            end_frame=total_frames - 1,
+            action_tag=segment["action_tag"]
+        )
+        action_range.confirmed_present = True
+        action_range.start_found = segment["start_frame"]
+        action_range.initiate_end_search(total_frames)
+        action_range.reset_depth_for_end_search()
+        
+        self.logger.debug(f"Processing end for {action_range.action_tag} starting at {action_range.start_found}")
+        
+        iteration = 0
+        while not action_range.is_resolved() and not action_range.has_reached_max_depth():
+            iteration += 1
+            
+            if action_range.end_search_start is not None and action_range.end_search_end is not None and action_range.end_search_end - action_range.end_search_start <= 1:
+                self.logger.debug(f"Window collapsed for {action_range.action_tag}, resolving")
+                action_range.is_stalled = True
+                break
+            
+            midpoint = action_range.get_midpoint()
+            if midpoint is None:
+                break
+            
+            if midpoint in processed_frame_data:
+                action_results = processed_frame_data[midpoint]["action_results"]
+            else:
+                async with vlm_semaphore:
+                    # (Copy extraction/analysis from _phase2_binary_search's process_midpoint_frame)
+                    # ...
+                    # Store in processed_frame_data[midpoint]
+                    with self.temp_frame(video_path, midpoint) as (frame_tensor, frame_pil):
+                        if frame_pil is None:
+                            continue
+                    
+                    action_results = await vlm_analyze_function(frame_pil)
+                    self.api_calls_made += 1
+                    self._cache_vlm_result((video_path, midpoint), action_results)
+            
+            self.boundary_detector.update_action_boundaries([action_range], midpoint, action_results, total_frames)
+        
+        return processed_frame_data
+
+    @contextmanager
+    def temp_frame(self, video_path, frame_idx):
+        frame_tensor = self.frame_extractor.extract_frame(video_path, frame_idx)
+        if frame_tensor is None:
+            yield None, None
+            return
+        frame_pil = self._convert_tensor_to_pil(frame_tensor)
+        yield frame_tensor, frame_pil
+        del frame_tensor, frame_pil
+        gc.collect()
