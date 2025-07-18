@@ -29,7 +29,7 @@ class VideoFrameExtractor:
         self.max_workers = max_workers
         self.logger = logging.getLogger("logger")
         self.frame_cache: Dict[Tuple[str, int], torch.Tensor] = {}
-        self.cache_size_limit = 100  # Increased cache size for better performance
+        self.cache_size_limit = 20  # Reduced for better memory management on large videos
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
     
     def extract_frame(self, video_path: str, frame_idx: int) -> Optional[torch.Tensor]:
@@ -120,6 +120,10 @@ class VideoFrameExtractor:
             oldest_key = next(iter(self.frame_cache))
             del self.frame_cache[oldest_key]
             self.logger.debug(f"Evicted cached frame {oldest_key[1]} from {oldest_key[0]}")
+            
+            # NEW: Force GC after eviction
+            import gc
+            gc.collect()
         
         self.frame_cache[cache_key] = frame_tensor.clone()  # Clone to avoid reference issues
         self.logger.debug(f"Cached frame {cache_key[1]} from {cache_key[0]}")

@@ -388,6 +388,18 @@ class ParallelBinarySearchEngine:
             # Store processed frame data
             processed_frame_data[frame_idx] = result
             
+            # NEW: Evict oldest if exceeding limit
+            if len(processed_frame_data) > self.processed_frame_data_max:
+                oldest_key = next(iter(processed_frame_data))
+                del processed_frame_data[oldest_key]
+                self.logger.debug(f'Evicted old frame data for {oldest_key} to bound memory')
+                gc.collect()
+
+            # NEW: Periodic GC every 50 frames to release memory aggressively
+            if i % 50 == 0:
+                gc.collect()
+                self.logger.debug(f'Periodic GC after processing frame {frame_idx}')
+
             # Check for action transitions (absent -> present)
             for action_tag in self.action_tags:
                 confidence = action_results.get(action_tag, 0.0)
@@ -410,6 +422,11 @@ class ParallelBinarySearchEngine:
         self.candidate_segments = candidate_segments
         
         self.logger.info(f"Phase 1 complete: Found {len(candidate_segments)} candidate action segments")
+        
+        # NEW: Clear frame extractor cache after Phase 1
+        self.frame_extractor.clear_cache()
+        gc.collect()
+        self.logger.debug('Cleared frame cache and forced GC after Phase 1')
         if len(candidate_segments) > self.max_candidates:
             self.logger.warning(f'Too many candidate segments ({len(candidate_segments)}), consider adjusting sampling or filtering')
         return candidate_segments
