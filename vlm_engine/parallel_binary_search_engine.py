@@ -62,7 +62,7 @@ class ParallelBinarySearchEngine:
         self.vlm_cache: Dict[Tuple[str, int], Dict[str, float]] = {}
         self.vlm_cache_size_limit = 200  # Cache up to 200 VLM analysis results
         self.processed_frame_data_max = 500
-        self.ram_log = True  # Set to False to disable RAM logging
+        self.ram_log = False  # Set to False to disable RAM logging
         self.max_candidates = 100  # Warning threshold for lists
         
         self.logger.info(f"ParallelBinarySearchEngine initialized for {len(self.action_tags)} actions")
@@ -822,6 +822,18 @@ class ParallelBinarySearchEngine:
                     action_results = await vlm_analyze_function(frame_pil)
                     self.api_calls_made += 1
                     self._cache_vlm_result((video_path, midpoint), action_results)
+                    
+                    # Store frame result
+                    frame_identifier = float(midpoint) / fps if use_timestamps else int(midpoint)
+                    processed_frame_data[midpoint] = {
+                        "frame_index": frame_identifier,
+                        "frame_idx": midpoint,
+                        "action_results": action_results,
+                        "actiondetection": [
+                            (tag, confidence) for tag, confidence in action_results.items()
+                            if confidence >= self.threshold
+                        ]
+                    }
             
             self.boundary_detector.update_action_boundaries([action_range], midpoint, action_results, total_frames)
         
