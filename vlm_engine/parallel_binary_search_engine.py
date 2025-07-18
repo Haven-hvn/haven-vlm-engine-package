@@ -739,7 +739,7 @@ class ParallelBinarySearchEngine:
                     else:
                         with self.temp_frame(video_path, mid, phase='Phase 1.5') as (frame_tensor, frame_pil):
                             if frame_pil is None:
-                                low = mid + 1
+                                refine_range.start_frame = mid + 1
                                 continue
                             action_results = await vlm_analyze_function(frame_pil)
                             self.api_calls_made += 1
@@ -766,7 +766,7 @@ class ParallelBinarySearchEngine:
                 
                 except Exception as e:
                     self.logger.error(f"Error refining {action_tag} at frame {mid}: {e}")
-                    low = mid + 1
+                    refine_range.start_frame = mid + 1
         
         segment["start_frame"] = refined_start
         self.logger.debug(f"{action_tag}: refined start from {detected_start} to {refined_start}")
@@ -823,12 +823,16 @@ class ParallelBinarySearchEngine:
                 async with vlm_semaphore:
                     with self.temp_frame(video_path, midpoint, phase='Phase 2') as (frame_tensor, frame_pil):
                         if frame_pil is None:
+                            self.logger.warning(f"Failed to extract frame {midpoint} for {action_range.action_tag}, skipping")
                             continue
             
             action_results = await vlm_analyze_function(frame_pil)
             self.api_calls_made += 1
             self._cache_vlm_result((video_path, midpoint), action_results)
-            
+
+            # Update boundaries with the results
+            self.boundary_detector.update_action_boundaries([action_range], midpoint, action_results, total_frames)
+
             # Store frame result
             frame_identifier = float(midpoint) / fps if use_timestamps else int(midpoint)
             processed_frame_data[midpoint] = {
