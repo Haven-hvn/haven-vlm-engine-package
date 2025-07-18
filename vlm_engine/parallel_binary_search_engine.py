@@ -166,7 +166,7 @@ class ParallelBinarySearchEngine:
                         current_ram = psutil.Process().memory_info().rss / 1024**2
                         self.logger.info(f'RAM after refining segment {segment["action_tag"]}: {current_ram:.1f} MB')
                     self.frame_extractor.clear_cache()
-                await refinement_queue.put(None)  # Sentinel to signal end
+                    await refinement_queue.put(refined)
             
             # Consumer task: Process enqueued segments for Phase 2
             async def consumer():
