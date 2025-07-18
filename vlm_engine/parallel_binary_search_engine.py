@@ -675,21 +675,28 @@ class ParallelBinarySearchEngine:
         total_frames: int
     ) -> Dict[str, Any]:
         """Refine start for a single segment (extracted from _refine_starts_backward for parallelism)."""
-        # (Copy the logic from refine_segment_start in _refine_starts_backward, but return the refined segment instead of modifying in-place)
         action_tag = segment["action_tag"]
         detected_start = segment["start_frame"]
         
         if detected_start <= 0:
-            self.logger.debug(f"Segment {action_tag}: start is already at frame 0")
             return segment
-        
+
+        # Create temp ActionRange for depth tracking
+        refine_range = ActionRange(start_frame=0, end_frame=detected_start - 1, action_tag=action_tag)
+        refine_range._calculate_max_depth()
+        refine_range.current_depth = 0  # Reset for this refinement
+
         low = 0
         high = detected_start - 1
         refined_start = detected_start
         
-        self.logger.debug(f"Refining {action_tag}: search range [{low}, {high}]")
+        self.logger.debug(f"Refining {action_tag}: search range [{low}, {high}], max_depth={refine_range.max_depth}")
         
         while low <= high:
+            if refine_range.has_reached_max_depth():
+                self.logger.warning(f"Backward refinement for {action_tag} reached max_depth {refine_range.max_depth}, falling back to {detected_start}")
+                break
+            
             mid = (low + high) // 2
             vlm_cache_key = (video_path, mid)
             
