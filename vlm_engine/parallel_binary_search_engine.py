@@ -156,20 +156,25 @@ class ParallelBinarySearchEngine:
             
             # Producer task: Refine and enqueue segments
             async def producer():
-                refined_segments = []
-                for segment in candidate_segments:
-                    refined = await self._refine_single_start(segment, video_path, vlm_analyze_function, vlm_semaphore, total_frames)
-                    refined_segments.append(refined)
-                    # NEW: Force GC and log memory after each refinement
-                    gc.collect()
-                    if self.ram_log:
-                        current_ram = psutil.Process().memory_info().rss / 1024**2
-                        self.logger.info(f'RAM after refining segment {segment["action_tag"]}: {current_ram:.1f} MB')
-                    self.frame_extractor.clear_cache()
-                    await refinement_queue.put(refined)
-            
-            # Signal end of production
-            await refinement_queue.put(None)
+                try:
+                    refined_segments = []
+                    for segment in candidate_segments:
+                        try:
+                            refined = await self._refine_single_start(segment, video_path, vlm_analyze_function, vlm_semaphore, total_frames)
+                            refined_segments.append(refined)
+                            # NEW: Force GC and log memory after each refinement
+                            gc.collect()
+                            if self.ram_log:
+                                current_ram = psutil.Process().memory_info().rss / 1024**2
+                                self.logger.info(f'RAM after refining segment {segment["action_tag"]}: {current_ram:.1f} MB')
+                            self.frame_extractor.clear_cache()
+                            await refinement_queue.put(refined)
+                            self.logger.debug(f"Enqueued refined segment for {segment['action_tag']}")
+                        except Exception as e:
+                            self.logger.error(f"Error refining segment {segment['action_tag']}: {e}")
+                            # Optionally continue or skip
+                finally:
+                    await refinement_queue.put(None)
             
             # Consumer task: Process enqueued segments for Phase 2
             async def consumer():
@@ -177,6 +182,7 @@ class ParallelBinarySearchEngine:
                     segment = await refinement_queue.get()
                     if segment is None:
                         break
+                    self.logger.debug(f"Consumer processing segment for {segment['action_tag']}")
                     # Process this segment's end search
                     segment_data = await self._phase2_process_single_segment(
                         video_path, vlm_analyze_function, vlm_semaphore, segment, total_frames, fps, use_timestamps
@@ -793,7 +799,7 @@ class ParallelBinarySearchEngine:
         action_range.initiate_end_search(total_frames)
         action_range.reset_depth_for_end_search()
         
-        self.logger.debug(f"Processing end for {action_range.action_tag} starting at {action_range.start_found}")
+        self.logger.debug(f"Starting Phase 2 for {action_range.action_tag} with end range [{action_range.end_search_start}, {action_range.end_search_end}]")
         
         iteration = 0
         while not action_range.is_resolved() and not action_range.has_reached_max_depth():
@@ -807,35 +813,41 @@ class ParallelBinarySearchEngine:
             midpoint = action_range.get_midpoint()
             if midpoint is None:
                 break
+            self.logger.debug(f"Iteration {iteration} for {action_range.action_tag}, midpoint={midpoint}")
             
             if midpoint in processed_frame_data:
                 action_results = processed_frame_data[midpoint]["action_results"]
             else:
                 async with vlm_semaphore:
-                    # (Copy extraction/analysis from _phase2_binary_search's process_midpoint_frame)
-                    # ...
-                    # Store in processed_frame_data[midpoint]
                     with self.temp_frame(video_path, midpoint, phase='Phase 2') as (frame_tensor, frame_pil):
                         if frame_pil is None:
                             continue
-                    
-                    action_results = await vlm_analyze_function(frame_pil)
-                    self.api_calls_made += 1
-                    self._cache_vlm_result((video_path, midpoint), action_results)
-                    
-                    # Store frame result
-                    frame_identifier = float(midpoint) / fps if use_timestamps else int(midpoint)
-                    processed_frame_data[midpoint] = {
-                        "frame_index": frame_identifier,
-                        "frame_idx": midpoint,
-                        "action_results": action_results,
-                        "actiondetection": [
-                            (tag, confidence) for tag, confidence in action_results.items()
-                            if confidence >= self.threshold
-                        ]
-                    }
             
-            self.boundary_detector.update_action_boundaries([action_range], midpoint, action_results, total_frames)
+            action_results = await vlm_analyze_function(frame_pil)
+            self.api_calls_made += 1
+            self._cache_vlm_result((video_path, midpoint), action_results)
+            
+            # Store frame result
+            frame_identifier = float(midpoint) / fps if use_timestamps else int(midpoint)
+            processed_frame_data[midpoint] = {
+                "frame_index": frame_identifier,
+                "frame_idx": midpoint,
+                "action_results": action_results,
+                "actiondetection": [
+                    (tag, confidence) for tag, confidence in action_results.items()
+                    if confidence >= self.threshold
+                ]
+            }
+        
+        self.logger.debug(f"Phase 2 ended for {action_range.action_tag}: resolved={action_range.is_resolved()}, stalled={action_range.is_stalled}, depth={action_range.current_depth}, end_found={action_range.end_found}")
+        
+        # NEW: Handle cases where no midpoints were processed (small/collapsed range)
+        if action_range.end_found is None and action_range.searching_end:
+            if action_range.end_search_start is not None and action_range.end_search_end is not None:
+                if action_range.end_search_start >= action_range.end_search_end:
+                    # Collapsed or single-frame action
+                    action_range.end_found = action_range.end_search_end
+                    self.logger.debug(f"Set end_found to {action_range.end_found} for small range in {action_range.action_tag}")
         
         return processed_frame_data
 
