@@ -331,7 +331,7 @@ class ParallelBinarySearchEngine:
         
         # Sample frames at regular intervals. Convert frame_interval from seconds to frames.
         # Ensure frame_step is at least 1 frame.
-        frame_step_frames = max(1, int(frame_interval * fps)) * 2
+        frame_step_frames = max(1, int(frame_interval * fps)) * 10
         scan_frames = list(range(0, total_frames, frame_step_frames))
         if scan_frames[-1] != total_frames - 1:
             scan_frames.append(total_frames - 1)  # Always include the last frame
