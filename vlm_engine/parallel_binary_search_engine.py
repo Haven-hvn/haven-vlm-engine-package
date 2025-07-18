@@ -740,6 +740,13 @@ class ParallelBinarySearchEngine:
                         self.logger.debug(f"Action present at {mid}, new refined_start={refined_start}")
                     else:
                         low = mid + 1
+
+                    # NEW: Periodic GC every 5 depth levels to release memory
+                    refine_range.current_depth += 1
+                    if refine_range.current_depth % 5 == 0:
+                        gc.collect()
+                        self.logger.debug(f'Periodic GC at depth {refine_range.current_depth} for {action_tag} refinement')
+
                 except Exception as e:
                     self.logger.error(f"Error refining {action_tag} at frame {mid}: {e}")
                     low = mid + 1
@@ -747,6 +754,11 @@ class ParallelBinarySearchEngine:
         segment["start_frame"] = refined_start
         self.logger.debug(f"{action_tag}: refined start from {detected_start} to {refined_start}")
         return segment
+
+        # NEW: Clear frame cache after refinement
+        self.frame_extractor.clear_cache()
+        gc.collect()
+        self.logger.debug(f'Cleared frame cache after refining {action_tag}')
 
     async def _phase2_process_single_segment(
         self,
