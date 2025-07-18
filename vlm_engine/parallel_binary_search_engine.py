@@ -156,10 +156,16 @@ class ParallelBinarySearchEngine:
             
             # Producer task: Refine and enqueue segments
             async def producer():
-                refinement_tasks = [self._refine_single_start(segment, video_path, vlm_analyze_function, vlm_semaphore, total_frames) for segment in candidate_segments]
-                refined_segments = await asyncio.gather(*refinement_tasks)
-                for refined in refined_segments:
-                    await refinement_queue.put(refined)
+                refined_segments = []
+                for segment in candidate_segments:
+                    refined = await self._refine_single_start(segment, video_path, vlm_analyze_function, vlm_semaphore, total_frames)
+                    refined_segments.append(refined)
+                    # NEW: Force GC and log memory after each refinement
+                    gc.collect()
+                    if self.ram_log:
+                        current_ram = psutil.Process().memory_info().rss / 1024**2
+                        self.logger.info(f'RAM after refining segment {segment["action_tag"]}: {current_ram:.1f} MB')
+                    self.frame_extractor.clear_cache()
                 await refinement_queue.put(None)  # Sentinel to signal end
             
             # Consumer task: Process enqueued segments for Phase 2
