@@ -274,7 +274,7 @@ class ParallelBinarySearchEngine:
                             self.logger.debug(f"VLM cache hit for refinement frame {mid}")
                         else:
                             # Extract and analyze frame
-                            with self.temp_frame(video_path, mid) as (frame_tensor, frame_pil):
+                            with self.temp_frame(video_path, mid, phase='Phase 1.5') as (frame_tensor, frame_pil):
                                 if frame_pil is None:
                                     low = mid + 1
                                     continue
@@ -350,7 +350,7 @@ class ParallelBinarySearchEngine:
                         self.logger.debug(f"VLM cache hit for frame {frame_idx}")
                     else:
                         # Extract frame
-                        with self.temp_frame(video_path, frame_idx) as (frame_tensor, frame_pil):
+                        with self.temp_frame(video_path, frame_idx, phase='Phase 1') as (frame_tensor, frame_pil):
                             if frame_pil is None:
                                 return None
                             action_results = await vlm_analyze_function(frame_pil)
@@ -502,7 +502,7 @@ class ParallelBinarySearchEngine:
                             self.logger.debug(f"VLM cache hit for frame {frame_idx}")
                         else:
                             # Extract frame
-                            with self.temp_frame(video_path, frame_idx) as (frame_tensor, frame_pil):
+                            with self.temp_frame(video_path, frame_idx, phase='Phase 2') as (frame_tensor, frame_pil):
                                 if frame_pil is None:
                                     return None
                             
@@ -699,7 +699,7 @@ class ParallelBinarySearchEngine:
                         action_results = self.vlm_cache[vlm_cache_key]
                         self.logger.debug(f"VLM cache hit for refinement frame {mid}")
                     else:
-                        with self.temp_frame(video_path, mid) as (frame_tensor, frame_pil):
+                        with self.temp_frame(video_path, mid, phase='Phase 1.5') as (frame_tensor, frame_pil):
                             if frame_pil is None:
                                 low = mid + 1
                                 continue
@@ -770,7 +770,7 @@ class ParallelBinarySearchEngine:
                     # (Copy extraction/analysis from _phase2_binary_search's process_midpoint_frame)
                     # ...
                     # Store in processed_frame_data[midpoint]
-                    with self.temp_frame(video_path, midpoint) as (frame_tensor, frame_pil):
+                    with self.temp_frame(video_path, midpoint, phase='Phase 2') as (frame_tensor, frame_pil):
                         if frame_pil is None:
                             continue
                     
@@ -783,7 +783,7 @@ class ParallelBinarySearchEngine:
         return processed_frame_data
 
     @contextmanager
-    def temp_frame(self, video_path, frame_idx):
+    def temp_frame(self, video_path, frame_idx, phase: str = ''):
         frame_tensor = self.frame_extractor.extract_frame(video_path, frame_idx)
         if frame_tensor is None:
             yield None, None
@@ -792,4 +792,8 @@ class ParallelBinarySearchEngine:
         yield frame_tensor, frame_pil
         del frame_tensor, frame_pil
         gc.collect()
-        self.logger.info(f'RAM after release for frame {frame_idx}: {psutil.Process().memory_info().rss / 1024**2:.1f} MB')
+        log_msg = f'RAM after release for frame {frame_idx}'
+        if phase:
+            log_msg += f' in {phase}'
+        log_msg += f': {psutil.Process().memory_info().rss / 1024**2:.1f} MB'
+        self.logger.info(log_msg)
