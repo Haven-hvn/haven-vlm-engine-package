@@ -53,9 +53,9 @@ class ActionBoundaryDetector:
                         continue
 
                 if is_present:
-                    # This frame has the action present. Record it as potential end frame
+                    # This frame has the action present. Record it as last present
                     # and search for a later end frame.
-                    action_range.end_found = frame_idx
+                    action_range.last_present_frame = frame_idx
                     action_range.end_search_start = frame_idx + 1
                     self.logger.debug(f"Action '{action_range.action_tag}' present at frame {frame_idx}, "
                                     f"searching right from {action_range.end_search_start}")
@@ -66,15 +66,15 @@ class ActionBoundaryDetector:
                                     f"searching left up to {action_range.end_search_end}")
                 
                 # If the search range has crossed, the end boundary is found.
-                # The last recorded end_found is the correct end frame.
+                # The last recorded last_present_frame is the correct end frame.
                 if action_range.end_search_start > action_range.end_search_end:
                     # Handle case where action was never found during binary search
-                    if action_range.end_found is None:
+                    if action_range.last_present_frame is None:
                         # If no end frame was found, set it to the start frame
-                        # This indicates the action is very brief (possibly single frame)
                         action_range.end_found = action_range.start_found
                         self.logger.debug(f"No end frame found for {action_range.action_tag} during binary search, setting end to start frame {action_range.end_found}")
                     else:
+                        action_range.end_found = action_range.last_present_frame
                         self.logger.debug(f"End boundary found for {action_range.action_tag} at frame {action_range.end_found}")
             else:
                 # This shouldn't happen in the hybrid approach since Phase 1 handles start detection

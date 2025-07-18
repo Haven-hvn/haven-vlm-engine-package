@@ -29,6 +29,9 @@ class ActionRange:
     max_depth: Optional[int] = None
     current_depth: int = 0
     
+    # Last present frame during end search
+    last_present_frame: Optional[int] = None
+    
     def __post_init__(self):
         """Calculate initial max depth after initialization"""
         self._calculate_max_depth()
@@ -45,8 +48,6 @@ class ActionRange:
                     return True
         
         # Original conditions for start search resolution and stalling still apply.
-        if self.confirmed_present and self.end_found is not None:
-            return True
         if (self.start_frame > self.end_frame) and not self.searching_end:
             return True
             

@@ -168,6 +168,9 @@ class ParallelBinarySearchEngine:
                     self.frame_extractor.clear_cache()
                     await refinement_queue.put(refined)
             
+            # Signal end of production
+            await refinement_queue.put(None)
+            
             # Consumer task: Process enqueued segments for Phase 2
             async def consumer():
                 while True:
