@@ -62,8 +62,11 @@ class ParallelBinarySearchEngine:
         self.vlm_cache: Dict[Tuple[str, int], Dict[str, float]] = {}
         self.vlm_cache_size_limit = 200  # Cache up to 200 VLM analysis results
         self.processed_frame_data_max = 500
-        self.ram_log = False  # Set to False to disable RAM logging
+        self.ram_log = True  # Set to False to disable RAM logging
         self.max_candidates = 100  # Warning threshold for lists
+        
+        # Optimization: Limit backward search in refinement
+        self.max_backward_search_frames = 2000
         
         self.logger.info(f"ParallelBinarySearchEngine initialized for {len(self.action_tags)} actions")
     
@@ -706,34 +709,30 @@ class ParallelBinarySearchEngine:
         vlm_semaphore: asyncio.Semaphore,
         total_frames: int
     ) -> Dict[str, Any]:
-        """Refine start for a single segment (extracted from _refine_starts_backward for parallelism)."""
+        """Refine the start frame of a candidate segment using backward binary search."""
         action_tag = segment["action_tag"]
         detected_start = segment["start_frame"]
         
-        if detected_start <= 0:
-            return segment
-
-        # Create temp ActionRange for depth tracking
-        refine_range = ActionRange(start_frame=0, end_frame=detected_start - 1, action_tag=action_tag)
-        refine_range._calculate_max_depth()
-        refine_range.current_depth = 0  # Reset for this refinement
-
-        low = 0
-        high = detected_start - 1
-        refined_start = detected_start
+        # Limit the backward search range to avoid searching the entire video
+        refine_start = max(0, detected_start - self.max_backward_search_frames)
+        refine_range = ActionRange(
+            refine_start,
+            detected_start - 1,
+            action_tag
+        )
+        self.logger.debug(f"Refining {action_tag}: search range [{refine_start}, {detected_start - 1}], max_depth={refine_range.max_depth}")
         
-        self.logger.debug(f"Refining {action_tag}: search range [{low}, {high}], max_depth={refine_range.max_depth}")
+        refined_start = refine_start  # Initialize to start of range
         
-        while low <= high:
-            if refine_range.has_reached_max_depth():
-                self.logger.warning(f"Backward refinement for {action_tag} reached max_depth {refine_range.max_depth}, falling back to {detected_start}")
+        while refine_range.start_frame <= refine_range.end_frame:
+            mid = refine_range.get_midpoint()
+            if mid is None:
                 break
-            
-            mid = (low + high) // 2
-            vlm_cache_key = (video_path, mid)
             
             async with vlm_semaphore:
                 try:
+                    # Check cache first
+                    vlm_cache_key = (video_path, mid)
                     if vlm_cache_key in self.vlm_cache:
                         action_results = self.vlm_cache[vlm_cache_key]
                         self.logger.debug(f"VLM cache hit for refinement frame {mid}")
@@ -750,18 +749,21 @@ class ParallelBinarySearchEngine:
                     is_present = confidence >= self.threshold
                     
                     if is_present:
-                        refined_start = mid
-                        high = mid - 1
-                        self.logger.debug(f"Action present at {mid}, new refined_start={refined_start}")
+                        # Action is present, true start is at or before this frame
+                        refined_start = mid  # Update potential start
+                        refine_range.end_frame = mid - 1  # Search left half
+                        self.logger.debug(f"{action_tag} present at {mid}, searching left")
                     else:
-                        low = mid + 1
-
+                        # Action absent, true start is after this frame
+                        refine_range.start_frame = mid + 1  # Search right half
+                        self.logger.debug(f"{action_tag} absent at {mid}, searching right")
+                    
                     # NEW: Periodic GC every 5 depth levels to release memory
                     refine_range.current_depth += 1
                     if refine_range.current_depth % 5 == 0:
                         gc.collect()
                         self.logger.debug(f'Periodic GC at depth {refine_range.current_depth} for {action_tag} refinement')
-
+                
                 except Exception as e:
                     self.logger.error(f"Error refining {action_tag} at frame {mid}: {e}")
                     low = mid + 1
