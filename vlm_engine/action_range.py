@@ -80,8 +80,8 @@ class ActionRange:
         
         # For larger ranges, bias toward the left side
         # Use 1/3 point for early iterations, gradually moving toward standard midpoint
-        if self.current_depth <= 2:
-            # First 2 iterations: search at 1/3 point (closer to start)
+        if self.current_depth <= 4:
+            # First 4 iterations: search at 1/3 point (closer to start)
             bias_offset = search_range // 3
         else:
             # Later iterations: use standard midpoint

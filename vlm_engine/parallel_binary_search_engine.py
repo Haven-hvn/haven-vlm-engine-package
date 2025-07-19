@@ -847,13 +847,17 @@ class ParallelBinarySearchEngine:
         
         self.logger.debug(f"Phase 2 ended for {action_range.action_tag}: resolved={action_range.is_resolved()}, stalled={action_range.is_stalled}, depth={action_range.current_depth}, end_found={action_range.end_found}")
         
-        # NEW: Handle cases where no midpoints were processed (small/collapsed range)
+        # NEW: Handle cases where no midpoints were processed (small/collapsed range) or stalled searches
         if action_range.end_found is None and action_range.searching_end:
             if action_range.end_search_start is not None and action_range.end_search_end is not None:
                 if action_range.end_search_start >= action_range.end_search_end:
                     # Collapsed or single-frame action
                     action_range.end_found = action_range.end_search_end
                     self.logger.debug(f"Set end_found to {action_range.end_found} for small range in {action_range.action_tag}")
+                elif action_range.is_stalled and action_range.last_present_frame is not None:
+                    # Stalled without resolution: assume up to max of last present or search end
+                    action_range.end_found = max(action_range.last_present_frame, action_range.end_search_end)
+                    self.logger.debug(f"Stalled search for {action_range.action_tag}: set end_found to {action_range.end_found} based on last present frame")
         
         return processed_frame_data
 
