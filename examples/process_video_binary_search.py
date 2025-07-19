@@ -5,7 +5,7 @@ from vlm_engine.config_models import EngineConfig, PipelineConfig, ModelConfig, 
 from typing import Callable
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.ERROR)
 
 async def main():
     # Define the configuration for the engine with Binary Search Processor

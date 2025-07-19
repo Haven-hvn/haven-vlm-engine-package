@@ -63,7 +63,7 @@ class ParallelBinarySearchEngine:
         self.vlm_cache: Dict[Tuple[str, int], Dict[str, float]] = {}
         self.vlm_cache_size_limit = 200  # Cache up to 200 VLM analysis results
         self.processed_frame_data_max = 500
-        self.ram_log = True  # Set to False to disable RAM logging
+        self.ram_log = False  # Set to False to disable RAM logging
         self.max_candidates = 100  # Warning threshold for lists
         
         # Optimization: Limit backward search in refinement
