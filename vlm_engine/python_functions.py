@@ -157,5 +157,9 @@ async def video_result_postprocessor(data: List[QueueItem]) -> None:
             
             output_target = item.output_names[0] if isinstance(item.output_names, list) else item.output_names
             await itemFuture.set_data(output_target, toReturn)
+            
+            callback = itemFuture["callback"] if "callback" in itemFuture else None
+            if callback:
+                callback(100)
         except Exception as e:
             itemFuture.set_exception(e)

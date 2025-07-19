@@ -4,7 +4,7 @@ from .config_models import EngineConfig
 from .pipeline import PipelineManager
 from .models import ModelManager
 from .dynamic_ai import DynamicAIManager
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +27,13 @@ class VLMEngine:
         """Initializes the pipelines."""
         await self.pipeline_manager.load_pipelines()
         
-    async def process_video(self, video_path: str, **kwargs) -> Dict[str, Any]:
+    async def process_video(self, video_path: str, progress_callback: Optional[Callable[[int], None]] = None, **kwargs) -> Dict[str, Any]:
         """
         Process a video and return tagging information.
         
         Args:
             video_path: Path to the video file
+            progress_callback: Optional callback for progress updates (progress 0-100)
             **kwargs: Additional processing parameters
             
         Returns:
@@ -50,6 +51,6 @@ class VLMEngine:
             kwargs.get("skipped_categories", None),
         ]
         
-        future = await self.pipeline_manager.get_request_future(data, pipeline_name)
+        future = await self.pipeline_manager.get_request_future(data, pipeline_name, callback=progress_callback)
         result = await future
         return result

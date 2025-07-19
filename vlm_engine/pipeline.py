@@ -4,7 +4,7 @@ from .models import ModelManager, AIModel, VLMAIModel, VideoPreprocessorModel
 from .config_models import PipelineConfig, PipelineModelConfig
 from .dynamic_ai import DynamicAIManager
 from .model_wrapper import ModelWrapper
-from typing import List, Dict, Any, Optional, Set, Union, Tuple
+from typing import List, Dict, Any, Optional, Set, Union, Tuple, Callable
 
 logger: logging.Logger = logging.getLogger("logger")
 
@@ -118,7 +118,7 @@ class PipelineManager:
             raise ValueError(f"Pipeline '{pipeline_name}' not found.")
         return self.pipelines[pipeline_name]
 
-    async def get_request_future(self, data: List[Any], pipeline_name: str) -> ItemFuture:
+    async def get_request_future(self, data: List[Any], pipeline_name: str, callback: Optional[Callable[[int], None]] = None) -> ItemFuture:
         pipeline = self.get_pipeline(pipeline_name)
         futureData: Dict[str, Any] = {}
         if len(data) != len(pipeline.inputs):
@@ -129,4 +129,8 @@ class PipelineManager:
         futureData["pipeline"] = pipeline
         futureData["category_config"] = self.category_config
         itemFuture: ItemFuture = await ItemFuture.create(None, futureData, pipeline.event_handler)
+        
+        if callback:
+            await itemFuture.set_data("callback", callback)
+        
         return itemFuture

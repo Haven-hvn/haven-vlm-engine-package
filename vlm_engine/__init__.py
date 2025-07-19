@@ -8,4 +8,4 @@ to traditional image classification methods.
 from .engine import VLMEngine
 
 __all__ = ["VLMEngine"]
-__version__ = "0.3.9995"
+__version__ = "0.3.9996"

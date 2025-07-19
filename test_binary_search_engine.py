@@ -660,6 +660,34 @@ class TestBinarySearchProcessor:
         assert config is None
 
 
+@pytest.mark.asyncio
+async def test_progress_callback_called():
+    # Mock vlm_analyze_function that always returns empty dict
+    async def mock_vlm(frame):
+        return {}
+    
+    engine = ParallelBinarySearchEngine(
+        action_tags=["test_action"],
+        progress_callback=Mock()
+    )
+    
+    # Small video simulation
+    await engine.process_video_binary_search(
+        "dummy_path",
+        mock_vlm,
+        frame_interval=1.0,
+        total_frames=10,  # Assume small for test
+        fps=30
+    )
+    
+    # Assert callback was called with increasing progresses
+    calls = engine.progress_callback.call_args_list
+    progresses = [call[0][0] for call in calls]
+    assert progresses[0] == 0
+    assert progresses[-1] == 90
+    assert all(p1 < p2 for p1, p2 in zip(progresses, progresses[1:]))  # Strictly increasing
+
+
 @pytest.mark.integration
 class TestIntegrationScenarios:
     """Integration tests for complete binary search scenarios"""

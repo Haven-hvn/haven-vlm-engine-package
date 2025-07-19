@@ -6,7 +6,7 @@ Replaces pure binary search with a more reliable two-phase process.
 import asyncio
 import logging
 import math
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, cast, Callable
 import torch
 import numpy as np
 from PIL import Image
@@ -41,7 +41,8 @@ class ParallelBinarySearchEngine:
         action_tags: Optional[List[str]] = None,
         threshold: float = 0.5,
         device_str: Optional[str] = None,
-        use_half_precision: bool = True
+        use_half_precision: bool = True,
+        progress_callback: Optional[Callable[[int], None]] = None
     ):
         self.action_tags = action_tags or []
         self.threshold = threshold
@@ -67,6 +68,11 @@ class ParallelBinarySearchEngine:
         
         # Optimization: Limit backward search in refinement
         self.max_backward_search_frames = 2000
+        
+        # Progress tracking
+        self.progress_callback = progress_callback
+        self._phase1_calls = 0
+        self._estimated_remaining_calls = 0
         
         self.logger.info(f"ParallelBinarySearchEngine initialized for {len(self.action_tags)} actions")
     
@@ -114,6 +120,8 @@ class ParallelBinarySearchEngine:
         
         Returns frame results compatible with existing postprocessing.
         """
+        self._call_progress(0)
+        
         # Get video metadata
         if is_macos_arm:
             if av is None:
@@ -140,6 +148,8 @@ class ParallelBinarySearchEngine:
         self.api_calls_made = 0
         self.vlm_cache.clear()
         
+        self._call_progress(5)  # Preprocessing/metadata done
+        
         # Create semaphore to limit concurrent VLM calls
         vlm_semaphore = asyncio.Semaphore(max_concurrent_vlm_calls)
         
@@ -148,6 +158,10 @@ class ParallelBinarySearchEngine:
         candidate_segments = await self._phase1_linear_scan(
             video_path, vlm_analyze_function, vlm_semaphore, total_frames, fps, use_timestamps, frame_interval
         )
+        
+        self._phase1_calls = self.api_calls_made
+        self._estimated_remaining_calls = len(candidate_segments) * 30  # Rough estimate: 15 for 1.5 + 15 for 2 per candidate
+        self._call_progress(30)
         
         # PHASE 1.5 and 2: Overlap refinement and end search using queue
         if candidate_segments:
@@ -160,50 +174,36 @@ class ParallelBinarySearchEngine:
             # Producer task: Refine and enqueue segments
             async def producer():
                 try:
-                    refined_segments = []
                     for segment in candidate_segments:
                         try:
                             refined = await self._refine_single_start(segment, video_path, vlm_analyze_function, vlm_semaphore, total_frames)
-                            refined_segments.append(refined)
-                            # NEW: Force GC and log memory after each refinement
-                            gc.collect()
-                            if self.ram_log:
-                                current_ram = psutil.Process().memory_info().rss / 1024**2
-                                self.logger.info(f'RAM after refining segment {segment["action_tag"]}: {current_ram:.1f} MB')
-                            self.frame_extractor.clear_cache()
                             await refinement_queue.put(refined)
+                            self._update_binary_progress()
                             self.logger.debug(f"Enqueued refined segment for {segment['action_tag']}")
                         except Exception as e:
                             self.logger.error(f"Error refining segment {segment['action_tag']}: {e}")
-                            # Optionally continue or skip
                 finally:
                     await refinement_queue.put(None)
             
             # Consumer task: Process enqueued segments for Phase 2
             async def consumer():
+                processed_frame_data = {}
                 while True:
                     segment = await refinement_queue.get()
                     if segment is None:
                         break
                     self.logger.debug(f"Consumer processing segment for {segment['action_tag']}")
-                    # Process this segment's end search
                     segment_data = await self._phase2_process_single_segment(
                         video_path, vlm_analyze_function, vlm_semaphore, segment, total_frames, fps, use_timestamps
                     )
                     processed_frame_data.update(segment_data)
-                    if len(processed_frame_data) > self.processed_frame_data_max:
-                        oldest_key = next(iter(processed_frame_data))
-                        del processed_frame_data[oldest_key]
-                        self.logger.debug(f'Evicted old frame data for {oldest_key} to bound memory')
-                        gc.collect()
-                    gc.collect()
+                    self._update_binary_progress()
                 return processed_frame_data
             
-            # Run producer and consumer concurrently
             producer_task = asyncio.create_task(producer())
             consumer_task = asyncio.create_task(consumer())
             
-            processed_frame_data = await consumer_task  # Back to simple await
+            processed_frame_data = await consumer_task
             
             self.logger.info(f"Phase 1.5+2 complete: Processed {len(processed_frame_data)} frames")
         else:
@@ -212,29 +212,7 @@ class ParallelBinarySearchEngine:
 
         frame_results = list(processed_frame_data.values())
         
-        del processed_frame_data
-        gc.collect()
-        if self.ram_log:
-            self.logger.info(f'Final RAM after clearing processed data: {psutil.Process().memory_info().rss / 1024**2:.1f} MB')
-        
-        # Generate action segment results with start/end frame information
-        action_segments = self._generate_action_segments_from_candidates(fps, use_timestamps)
-        
-        # Log performance metrics and action segment summary
-        linear_calls = self.total_frames // max(1, int(fps * 0.5))  # Estimate linear approach
-        efficiency = ((linear_calls - self.api_calls_made) / linear_calls * 100) if linear_calls > 0 else 0
-        
-        self.logger.info(
-            f"Hybrid scan completed: {self.api_calls_made} API calls "
-            f"(vs ~{linear_calls} linear), {efficiency:.1f}% reduction"
-        )
-        
-        # Log detected action segments
-        if action_segments:
-            self.logger.info(f"Detected {len(action_segments)} action segments:")
-            for segment in action_segments:
-                duration = segment['end_frame'] - segment['start_frame'] + 1
-                self.logger.info(f"  {segment['action_tag']}: frames {segment['start_frame']}-{segment['end_frame']} ({duration} frames)")
+        self._call_progress(90)
         
         return frame_results
     
@@ -391,12 +369,20 @@ class ParallelBinarySearchEngine:
                     self.logger.error(f"VLM analysis failed for frame {frame_idx}: {e}")
                     return None
         
-        # Process all scan frames concurrently
+        # Process all scan frames concurrently with progress updates
         frame_tasks = [process_scan_frame(frame_idx) for frame_idx in scan_frames]
-        concurrent_results = await asyncio.gather(*frame_tasks, return_exceptions=True)
+        results = []
+        total_scan = len(frame_tasks)
+        
+        for fut in asyncio.as_completed(frame_tasks):
+            result = await fut
+            results.append(result)
+            completed = len(results)
+            progress = 10 + int(20 * (completed / total_scan))
+            self._call_progress(progress)
         
         # Analyze results to detect action transitions
-        for i, result in enumerate(concurrent_results):
+        for i, result in enumerate(results):
             if isinstance(result, Exception) or result is None:
                 continue
             assert isinstance(result, dict)
@@ -828,8 +814,8 @@ class ParallelBinarySearchEngine:
             
             action_results = await vlm_analyze_function(frame_pil)
             self.api_calls_made += 1
-            self._cache_vlm_result((video_path, midpoint), action_results)
-
+            self._update_binary_progress()
+            
             # Update boundaries with the results
             self.boundary_detector.update_action_boundaries([action_range], midpoint, action_results, total_frames)
 
@@ -876,3 +862,15 @@ class ParallelBinarySearchEngine:
             log_msg += f' in {phase}'
         log_msg += f': {psutil.Process().memory_info().rss / 1024**2:.1f} MB'
         self.logger.info(log_msg)
+
+    def _call_progress(self, progress: int):
+        if self.progress_callback:
+            self.progress_callback(progress)
+
+    def _update_binary_progress(self):
+        if not self.progress_callback or self._estimated_remaining_calls == 0:
+            return
+        current = self.api_calls_made - self._phase1_calls
+        frac = min(1.0, current / self._estimated_remaining_calls)
+        progress = 30 + int(60 * frac)
+        self._call_progress(progress)

@@ -71,6 +71,10 @@ class BinarySearchProcessor:
         threshold: float = item_future[item.input_names[3]] if item.input_names[3] in item_future else 0.5
         return_confidence: bool = item_future[item.input_names[4]] if item.input_names[4] in item_future else True
 
+        callback = item_future["callback"] if "callback" in item_future else None
+        if callback:
+            callback(0)
+
         # Get VLM configuration from pipeline
         vlm_config = self._extract_vlm_config(item_future)
         if vlm_config is None:
@@ -95,7 +99,8 @@ class BinarySearchProcessor:
             action_tags=action_tags,
             threshold=threshold,
             device_str=self.device,
-            use_half_precision=self.use_half_precision
+            use_half_precision=self.use_half_precision,
+            progress_callback=callback
         )
 
         # Get VLM coordinator from pipeline
@@ -119,6 +124,9 @@ class BinarySearchProcessor:
             use_timestamps=use_timestamps,
             max_concurrent_vlm_calls=10  # Increase from default of 10 for more concurrent VLM requests per video
         )
+        
+        if callback:
+            callback(90)
 
         # Sort frame results by frame_index to ensure chronological order for postprocessing
         # This is critical because binary search processes frames out of order, but the
@@ -186,6 +194,14 @@ class BinarySearchProcessor:
         current_frame_interval: float = frame_interval_override if frame_interval_override is not None else 0.5
         vr_video: bool = item_future[item.input_names[5]] if item.input_names[5] in item_future else False
 
+        callback = item_future["callback"] if "callback" in item_future else None
+        if callback:
+            callback(0)
+
+        from .preprocessing import get_video_duration_decord
+        duration = get_video_duration_decord(video_path)
+        expected_frames = int(duration / current_frame_interval) + 1
+
         children = []
         processed_frames_count = 0
 
@@ -207,7 +223,13 @@ class BinarySearchProcessor:
             await result_future.set_data("frame_index", frame_index)
             children.append(result_future)
 
+            if callback and processed_frames_count % 10 == 0:  # Update every 10 frames
+                progress = int(90 * (processed_frames_count / expected_frames))
+                callback(progress)
+
         await item_future.set_data(item.output_names[0], children)
+        if callback:
+            callback(100)
         self.logger.info(f"Fallback linear processing completed: {processed_frames_count} frames")
 
     async def load(self) -> None:

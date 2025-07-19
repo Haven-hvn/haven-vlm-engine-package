@@ -2,6 +2,7 @@ import asyncio
 import logging
 from vlm_engine import VLMEngine
 from vlm_engine.config_models import EngineConfig, PipelineConfig, ModelConfig, PipelineModelConfig
+from typing import Callable
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -350,6 +351,14 @@ async def main():
         # The issue was that the semaphore was too restrictive (5) for proper video processing
         semaphore = asyncio.Semaphore(20)
         
+        video_progress = {v: 0 for v in videos}
+        
+        def make_callback(vid: str) -> Callable[[int], None]:
+            def cb(p: int):
+                video_progress[vid] = p
+                logging.info(f"Progress: { {k: f'{v}%' for k,v in video_progress.items()} }")
+            return cb
+        
         async def process_video_with_semaphore(video_path, video_index):
             async with semaphore:
                 print(f"🎬 Starting video {video_index + 1}: {video_path}")
@@ -360,7 +369,8 @@ async def main():
                     frame_interval=30.0,
                     return_timestamps=True,
                     threshold=0.5,
-                    return_confidence=True
+                    return_confidence=True,
+                    progress_callback=make_callback(video_path)
                 )
                 
                 end_time = asyncio.get_event_loop().time()
