@@ -115,6 +115,7 @@ class BinarySearchProcessor:
         frame_results = await engine.process_video_binary_search(
             video_path=video_path,
             vlm_analyze_function=vlm_analyze_function,
+            frame_interval=frame_interval_override if frame_interval_override is not None else 1.0,
             use_timestamps=use_timestamps,
             max_concurrent_vlm_calls=10  # Increase from default of 10 for more concurrent VLM requests per video
         )
