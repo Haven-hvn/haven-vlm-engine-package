@@ -310,7 +310,7 @@ class BinarySearchPipelineProcessor(Model):
         
         return None
     
-    def _get_vlm_coordinator(self, item_future: ItemFuture) -> Optional[VLMBatchCoordinator]:
+    def _get_vlm_coordinator(self, item_future: ItemFuture) -> Optional[IntegratedVLMCoordinator]:
         """Get VLM coordinator from pipeline context"""
         # Same logic as original BinarySearchProcessor
         pipeline = item_future["pipeline"]
@@ -322,7 +322,7 @@ class BinarySearchPipelineProcessor(Model):
             if hasattr(model_wrapper.model, 'model') and hasattr(model_wrapper.model.model, 'vlm_model'):
                 vlm_model = model_wrapper.model.model
                 if vlm_model.vlm_model is not None:
-                    return IntegratedVLMCoordinator(vlm_model.vlm_model)
+                    return IntegratedVLMCoordinator(pipeline.models)
         
         return None
     
