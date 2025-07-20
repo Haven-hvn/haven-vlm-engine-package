@@ -1,9 +1,25 @@
 # VLM Engine Binary Search Architecture
-## Complete Performance Overhaul - 98% API Call Reduction
+## Modular Pipeline Implementation - 98% API Call Reduction + Enhanced Maintainability
 
 ### Executive Summary
 
-The VLM Engine has been completely rewritten with a **Parallel Binary Search Engine** that achieves **98% reduction in API calls** while maintaining **100% external API compatibility**. This revolutionary approach replaces linear frame sampling with intelligent binary search, reducing processing time from hours to minutes for large videos.
+The VLM Engine implements a **Modular Pipeline Architecture** that achieves **98% reduction in API calls** while maintaining **100% external API compatibility**. This revolutionary approach replaces linear frame sampling with intelligent binary search through discrete pipeline stages, reducing processing time from hours to minutes for large videos while providing superior modularity and maintainability.
+
+### Modular Pipeline Architecture
+
+The binary search functionality is implemented using **5 discrete pipeline stages** that integrate seamlessly with the existing pipeline system:
+
+1. **MetadataExtractionStage** - Video analysis and initialization
+2. **CandidateProposalStage** - Linear scan for action candidates
+3. **StartRefinementStage** - Binary search for precise start boundaries
+4. **EndDeterminationStage** - Binary search for precise end boundaries
+5. **ResultCompilationStage** - Aggregate results into final format
+
+This modular approach provides:
+- **Enhanced Maintainability** - Each stage can be developed, tested, and optimized independently
+- **Better Scalability** - Stages can be parallelized and distributed across multiple workers
+- **Improved Debugging** - Issues can be isolated to specific stages
+- **Future Extensibility** - New stages can be added without affecting existing functionality
 
 ## 🚀 Performance Improvements
 
@@ -20,24 +36,66 @@ The VLM Engine has been completely rewritten with a **Parallel Binary Search Eng
 
 ## 🏗️ Architecture Overview
 
-### Core Components
+### Modular Pipeline Architecture
 
-#### 1. ParallelBinarySearchEngine (`binary_search_processor.py`)
-Main processing engine that orchestrates the entire binary search operation.
+The new modular approach breaks down video processing into discrete, maintainable stages:
 
 ```python
-class ParallelBinarySearchEngine:
+# Modular Pipeline-based processor
+class BinarySearchPipelineProcessor:
     """
-    Revolutionary video processing engine using parallel binary search.
-    Replaces linear frame sampling with intelligent boundary detection.
+    Pipeline-based binary search processor that orchestrates discrete stages.
+    Provides enhanced modularity while maintaining API compatibility.
     """
-    
-    def __init__(self, action_tags: List[str], threshold: float = 0.5):
-        self.action_tags = action_tags
-        self.midpoint_collector = AdaptiveMidpointCollector()
-        self.boundary_detector = ActionBoundaryDetector(threshold)
-        self.frame_extractor = VideoFrameExtractor()
+
+    async def _process_item_through_pipeline(self, item: QueueItem):
+        # Stage 1: Extract video metadata
+        video_metadata = await self._execute_metadata_extraction(...)
+
+        # Stage 2: Find candidate action starts
+        video_metadata = await self._execute_candidate_proposal(...)
+
+        # Stage 3: Refine start boundaries
+        video_metadata = await self._execute_start_refinement(...)
+
+        # Stage 4: Determine end boundaries
+        video_metadata = await self._execute_end_determination(...)
+
+        # Stage 5: Compile final results
+        frame_results = await self._execute_result_compilation(...)
 ```
+
+### Pipeline Stages
+
+#### 1. MetadataExtractionStage (`pipeline_stages.py`)
+Extracts video metadata and initializes search parameters.
+
+**Inputs:** `video_path`, `action_tags`, `threshold`, `frame_interval`, `use_timestamps`, `max_concurrent_vlm_calls`
+**Outputs:** `video_metadata` (contains fps, total_frames, action_ranges, vlm_semaphore)
+
+#### 2. CandidateProposalStage (`pipeline_stages.py`)
+Performs linear scan to find candidate action starts (Phase 1).
+
+**Inputs:** `video_metadata`, `vlm_analyze_function`
+**Outputs:** `video_metadata` (with candidate_segments)
+
+#### 3. StartRefinementStage (`pipeline_stages.py`)
+Binary search backward to refine starts to exact first action frame (Phase 1.5).
+
+**Inputs:** `video_metadata` (with candidate_segments), `vlm_analyze_function`
+**Outputs:** `video_metadata` (with refined candidate_segments)
+
+#### 4. EndDeterminationStage (`pipeline_stages.py`)
+Parallel binary search to refine action ends (Phase 2).
+
+**Inputs:** `video_metadata` (with refined candidate_segments), `vlm_analyze_function`
+**Outputs:** `video_metadata` (with complete action ranges)
+
+#### 5. ResultCompilationStage (`pipeline_stages.py`)
+Aggregates results into final format compatible with existing postprocessing.
+
+**Inputs:** `video_metadata` (with complete action ranges)
+**Outputs:** `frame_results` (List[Dict[str, Any]] compatible with existing postprocessing)
 
 #### 2. ActionRange Data Structure
 Tracks search boundaries for each action with binary search state.
@@ -120,26 +178,23 @@ while self.has_unresolved_actions():
 
 ## 📦 Integration Guide
 
-### Updating Existing Code
+### Configuration
 
-Replace the `video_preprocessor_dynamic` with `binary_search_processor_dynamic`:
+Replace the `video_preprocessor_dynamic` with `binary_search_pipeline_processor_dynamic`:
 
 ```python
-# OLD Configuration
-models={
-    "video_preprocessor_dynamic": ModelConfig(
-        type="video_preprocessor", 
-        model_file_name="video_preprocessor_dynamic"
-    ),
-    # ... other models
-}
-
-# NEW Configuration  
+# Modular Pipeline Configuration
 models={
     "binary_search_processor_dynamic": ModelConfig(
-        type="binary_search_processor",
-        model_file_name="binary_search_processor_dynamic"
+        type="binary_search_pipeline_processor",
+        model_file_name="binary_search_pipeline_processor_dynamic"
     ),
+    # Individual stages (automatically managed by pipeline processor)
+    "metadata_extraction_stage": ModelConfig(type="metadata_extraction_stage"),
+    "candidate_proposal_stage": ModelConfig(type="candidate_proposal_stage"),
+    "start_refinement_stage": ModelConfig(type="start_refinement_stage"),
+    "end_determination_stage": ModelConfig(type="end_determination_stage"),
+    "result_compilation_stage": ModelConfig(type="result_compilation_stage"),
     # ... other models (unchanged)
 }
 ```
@@ -156,17 +211,17 @@ async def main():
         active_ai_models=["vlm_nsfw_model"],
         pipelines={
             "video_pipeline_dynamic": PipelineConfig(
-                inputs=["video_path", "return_timestamps", "time_interval", 
-                       "threshold", "return_confidence", "vr_video", 
+                inputs=["video_path", "return_timestamps", "time_interval",
+                       "threshold", "return_confidence", "vr_video",
                        "existing_video_data", "skipped_categories"],
                 output="results",
                 short_name="dynamic_video",
-                version=2.0,  # Binary search version
+                version=2.0,  # Modular pipeline version
                 models=[
                     PipelineModelConfig(
                         name="dynamic_video_ai",
-                        inputs=["video_path", "return_timestamps", "time_interval", 
-                               "threshold", "return_confidence", "vr_video", 
+                        inputs=["video_path", "return_timestamps", "time_interval",
+                               "threshold", "return_confidence", "vr_video",
                                "existing_video_data", "skipped_categories"],
                         outputs="results",
                     ),
@@ -174,11 +229,17 @@ async def main():
             )
         },
         models={
-            # NEW: Binary Search Processor
+            # Modular Pipeline Processor
             "binary_search_processor_dynamic": ModelConfig(
-                type="binary_search_processor",
-                model_file_name="binary_search_processor_dynamic"
+                type="binary_search_pipeline_processor",
+                model_file_name="binary_search_pipeline_processor_dynamic"
             ),
+            # Pipeline stages (automatically managed)
+            "metadata_extraction_stage": ModelConfig(type="metadata_extraction_stage"),
+            "candidate_proposal_stage": ModelConfig(type="candidate_proposal_stage"),
+            "start_refinement_stage": ModelConfig(type="start_refinement_stage"),
+            "end_determination_stage": ModelConfig(type="end_determination_stage"),
+            "result_compilation_stage": ModelConfig(type="result_compilation_stage"),
             "vlm_nsfw_model": ModelConfig(
                 type="vlm_model",
                 model_category="actiondetection",
@@ -189,11 +250,11 @@ async def main():
         },
         # ... category_config remains unchanged
     )
-    
+
     engine = VLMEngine(config=engine_config)
     await engine.initialize()
-    
-    # Same API - now with 98% performance improvement!
+
+    # Same API - now with 98% performance improvement + enhanced modularity!
     results = await engine.process_video("video.mp4")
     print(f"Results: {results}")
 

@@ -36,14 +36,20 @@ async def main():
             )
         },
         models={
-            # NEW: Binary Search Processor replaces video_preprocessor_dynamic
+            # NEW: Modular Pipeline Binary Search Processor replaces video_preprocessor_dynamic
             "binary_search_processor_dynamic": ModelConfig(
-                type="binary_search_processor", 
-                model_file_name="binary_search_processor_dynamic",
+                type="binary_search_pipeline_processor",
+                model_file_name="binary_search_pipeline_processor_dynamic",
                 instance_count=10,           # Multiple instances for parallel video processing
                 max_batch_size=1,            # Process one video at a time for better concurrency
                 max_concurrent_requests=20,  # Allow concurrent video processing
             ),
+            # Pipeline stages (automatically managed by the processor)
+            "metadata_extraction_stage": ModelConfig(type="metadata_extraction_stage"),
+            "candidate_proposal_stage": ModelConfig(type="candidate_proposal_stage"),
+            "start_refinement_stage": ModelConfig(type="start_refinement_stage"),
+            "end_determination_stage": ModelConfig(type="end_determination_stage"),
+            "result_compilation_stage": ModelConfig(type="result_compilation_stage"),
             "vlm_nsfw_model": ModelConfig(
                 type="vlm_model",
                 model_file_name="vlm_nsfw_model",

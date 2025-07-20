@@ -250,10 +250,36 @@ class ModelManager:
             case "video_preprocessor":
                 model_instance = VideoPreprocessorModel(model_config)
                 return ModelProcessor(model_instance)
-            case "binary_search_processor":
-                # New binary search processor for optimized video processing
-                from .binary_search_processor import BinarySearchProcessor
-                model_instance = BinarySearchProcessor(model_config)
+
+            case "metadata_extraction_stage":
+                # Pipeline stage for video metadata extraction
+                from .pipeline_stages import MetadataExtractionStage
+                model_instance = MetadataExtractionStage(model_config)
+                return ModelProcessor(model_instance)
+            case "candidate_proposal_stage":
+                # Pipeline stage for candidate action detection
+                from .pipeline_stages import CandidateProposalStage
+                model_instance = CandidateProposalStage(model_config)
+                return ModelProcessor(model_instance)
+            case "start_refinement_stage":
+                # Pipeline stage for start boundary refinement
+                from .pipeline_stages import StartRefinementStage
+                model_instance = StartRefinementStage(model_config)
+                return ModelProcessor(model_instance)
+            case "end_determination_stage":
+                # Pipeline stage for end boundary determination
+                from .pipeline_stages import EndDeterminationStage
+                model_instance = EndDeterminationStage(model_config)
+                return ModelProcessor(model_instance)
+            case "result_compilation_stage":
+                # Pipeline stage for result compilation
+                from .pipeline_stages import ResultCompilationStage
+                model_instance = ResultCompilationStage(model_config)
+                return ModelProcessor(model_instance)
+            case "binary_search_pipeline_processor":
+                # New pipeline-based binary search processor
+                from .binary_search_pipeline_processor import BinarySearchPipelineProcessor
+                model_instance = BinarySearchPipelineProcessor(model_config)
                 return ModelProcessor(model_instance)
             case "vlm_model":
                 model_instance = VLMAIModel(model_config)
