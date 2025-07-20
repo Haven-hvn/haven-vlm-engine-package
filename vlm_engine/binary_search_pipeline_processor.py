@@ -104,7 +104,7 @@ class BinarySearchPipelineProcessor(Model):
             return await vlm_coordinator.analyze_frame(frame_pil)
         
         # Progress callback
-        callback = item_future.get("callback")
+        callback = item_future["callback"]
         if callback:
             callback(10)  # Starting pipeline
         
@@ -295,7 +295,7 @@ class BinarySearchPipelineProcessor(Model):
     def _extract_vlm_config(self, item_future: ItemFuture) -> Optional[Dict[str, Any]]:
         """Extract VLM configuration from pipeline context"""
         # Same logic as original BinarySearchProcessor
-        pipeline = item_future.get("pipeline")
+        pipeline = item_future["pipeline"]
         if pipeline is None:
             return None
         
@@ -313,7 +313,7 @@ class BinarySearchPipelineProcessor(Model):
     def _get_vlm_coordinator(self, item_future: ItemFuture) -> Optional[VLMBatchCoordinator]:
         """Get VLM coordinator from pipeline context"""
         # Same logic as original BinarySearchProcessor
-        pipeline = item_future.get("pipeline")
+        pipeline = item_future["pipeline"]
         if pipeline is None:
             return None
         
