@@ -284,12 +284,13 @@ class CandidateProposalStage(BasePipelineStage):
     async def _process_scan_frame(self, video_path, frame_idx, vlm_analyze_function, vlm_semaphore, vlm_cache, video_metadata):
         async with vlm_semaphore:
             try:
+                frame_extractor = video_metadata["frame_extractor"]  # Unpack here
                 vlm_cache_key = (video_path, frame_idx)
                 if vlm_cache_key in vlm_cache:
                     action_results = vlm_cache[vlm_cache_key]
                     self.logger.debug(f"VLM cache hit for frame {frame_idx}")
                 else:
-                    with self._temp_frame(self.frame_extractor, video_path, frame_idx, 'Phase 1') as (frame_tensor, frame_pil):
+                    with self._temp_frame(frame_extractor, video_path, frame_idx, 'Phase 1') as (frame_tensor, frame_pil):
                         if frame_pil is None:
                             return None
                     action_results = await vlm_analyze_function(frame_pil)
