@@ -646,6 +646,18 @@ class EndDeterminationStage(BasePipelineStage):
                 processed_frame_data[frame_idx] = result
 
         # Update candidate segments with end boundaries
+        for action_range in action_ranges:
+            if action_range.end_found is None and action_range.searching_end:
+                if action_range.end_search_start is not None and action_range.end_search_end is not None:
+                    if action_range.end_search_start >= action_range.end_search_end:
+                        # Collapsed or single-frame action
+                        action_range.end_found = action_range.end_search_end
+                        self.logger.debug(f"Set end_found to {action_range.end_found} for small range in {action_range.action_tag}")
+                    elif action_range.is_stalled and action_range.last_present_frame is not None:
+                        # Stalled without resolution: assume up to max of last present or search end
+                        action_range.end_found = max(action_range.last_present_frame, action_range.end_search_end)
+                        self.logger.debug(f"Stalled search for {action_range.action_tag}: set end_found to {action_range.end_found} based on last present frame")
+
         for i, action_range in enumerate(action_ranges):
             segment = candidate_segments[i]
             if action_range.end_found is not None:
@@ -745,7 +757,7 @@ class ResultCompilationStage(BasePipelineStage):
         fps = video_metadata["fps"]
         use_timestamps = video_metadata["use_timestamps"] if "use_timestamps" in video_metadata else True
         self.logger.debug(f"Compiling frame results for {len(processed_frame_data)} processed frames and {len(candidate_segments)} candidate segments")
-        self.logger.debug(f"FPS: {fps}, Use timestamps(bool): {use_timestamps}")
+        self.logger.debug(f"FPS: {fps}, Use timestamps: {use_timestamps}")
 
         # Start with all processed frames
         frame_results = []
