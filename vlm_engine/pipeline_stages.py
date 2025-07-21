@@ -230,63 +230,79 @@ class CandidateProposalStage(BasePipelineStage):
         # Calculate frame step for linear scan
         frame_step = max(1, int(fps * frame_interval))
         scan_frames = list(range(0, total_frames, frame_step))
+        if scan_frames and scan_frames[-1] != total_frames - 1:
+            scan_frames.append(total_frames - 1)  # Always include the last frame
         
         self.logger.info(f"Linear scan: processing {len(scan_frames)} frames with step {frame_step}")
         
-        for frame_idx in scan_frames:
-            async with vlm_semaphore:
-                try:
-                    # Check VLM cache first
-                    vlm_cache_key = (video_path, frame_idx)
-                    if vlm_cache_key in vlm_cache:
-                        action_results = vlm_cache[vlm_cache_key]
-                        self.logger.debug(f"VLM cache hit for frame {frame_idx}")
-                    else:
-                        # Extract frame
-                        with self._temp_frame(frame_extractor, video_path, frame_idx, 'Phase 1') as (frame_tensor, frame_pil):
-                            if frame_pil is None:
-                                continue
-                        
-                        # Analyze frame with VLM
-                        action_results = await vlm_analyze_function(frame_pil)
-                        video_metadata["api_calls_made"] += 1
-                        
-                        # Cache the VLM analysis result
-                        self._cache_vlm_result(vlm_cache, vlm_cache_key, action_results)
-                    
-                    # Store frame result
-                    frame_result = {
-                        "frame_idx": frame_idx,
-                        "action_results": action_results,
+        # Process frames concurrently with as_completed for progress
+        frame_tasks = [self._process_scan_frame(video_path, frame_idx, vlm_analyze_function, vlm_semaphore, vlm_cache, video_metadata) for frame_idx in scan_frames]
+        results = []
+        total_scan = len(frame_tasks)
+        for fut in asyncio.as_completed(frame_tasks):
+            result = await fut
+            results.append(result)
+            # Optional: Add progress logging if needed
+        
+        for result in results:
+            if result is None:
+                continue
+            
+            frame_idx = result["frame_idx"]
+            action_results = result["action_results"]
+            
+            # Store frame result
+            frame_result = {
+                "frame_idx": frame_idx,
+                "action_results": action_results,
+                "timestamp": frame_idx / fps if use_timestamps else frame_idx
+            }
+            processed_frame_data[frame_idx] = frame_result
+            
+            # Check for action transitions (absent -> present)
+            for action_tag in action_tags:
+                confidence = action_results.get(action_tag, 0.0)
+                is_present = confidence >= video_metadata["threshold"]
+                was_present = last_action_states[action_tag]
+                
+                # Detect transition from absent to present
+                if is_present and not was_present:
+                    candidate_segment = {
+                        "action_tag": action_tag,
+                        "start_frame": frame_idx,
+                        "confidence": confidence,
                         "timestamp": frame_idx / fps if use_timestamps else frame_idx
                     }
-                    processed_frame_data[frame_idx] = frame_result
-                    
-                    # Check for action transitions (absent -> present)
-                    for action_tag in action_tags:
-                        confidence = action_results.get(action_tag, 0.0)
-                        is_present = confidence >= video_metadata["threshold"]
-                        was_present = last_action_states[action_tag]
-                        
-                        # Detect transition from absent to present
-                        if is_present and not was_present:
-                            candidate_segment = {
-                                "action_tag": action_tag,
-                                "start_frame": frame_idx,
-                                "confidence": confidence,
-                                "timestamp": frame_idx / fps if use_timestamps else frame_idx
-                            }
-                            candidate_segments.append(candidate_segment)
-                            self.logger.debug(f"Candidate start detected: {action_tag} at frame {frame_idx} (confidence: {confidence:.3f})")
-                        
-                        # Update state
-                        last_action_states[action_tag] = is_present
+                    candidate_segments.append(candidate_segment)
+                    self.logger.debug(f"Candidate start detected: {action_tag} at frame {frame_idx} (confidence: {confidence:.3f})")
                 
-                except Exception as e:
-                    self.logger.error(f"Error processing frame {frame_idx} in Phase 1: {e}")
-                    continue
+                # Update state
+                last_action_states[action_tag] = is_present
         
         return candidate_segments
+    
+    async def _process_scan_frame(self, video_path, frame_idx, vlm_analyze_function, vlm_semaphore, vlm_cache, video_metadata):
+        async with vlm_semaphore:
+            try:
+                vlm_cache_key = (video_path, frame_idx)
+                if vlm_cache_key in vlm_cache:
+                    action_results = vlm_cache[vlm_cache_key]
+                    self.logger.debug(f"VLM cache hit for frame {frame_idx}")
+                else:
+                    with self._temp_frame(self.frame_extractor, video_path, frame_idx, 'Phase 1') as (frame_tensor, frame_pil):
+                        if frame_pil is None:
+                            return None
+                    action_results = await vlm_analyze_function(frame_pil)
+                    video_metadata["api_calls_made"] += 1
+                    self._cache_vlm_result(vlm_cache, vlm_cache_key, action_results)
+                return {
+                    "frame_idx": frame_idx,
+                    "action_results": action_results,
+                    "timestamp": frame_idx / fps if use_timestamps else frame_idx
+                }
+            except Exception as e:
+                self.logger.error(f"Error processing frame {frame_idx} in Phase 1: {e}")
+                return None
     
     @contextmanager
     def _temp_frame(self, frame_extractor, video_path, frame_idx, phase: str = ''):
@@ -410,40 +426,39 @@ class StartRefinementStage(BasePipelineStage):
             # Binary search for the exact start frame
             left, right = search_start, search_end
             refined_start = detected_start  # Default to detected start
-
-            while left <= right:
-                mid = (left + right) // 2
-
+            refine_range = ActionRange(search_start, search_end, action_tag)  # Use temporary ActionRange
+            refine_range.current_depth = 0
+            while refine_range.start_frame <= refine_range.end_frame:
+                mid = refine_range.get_midpoint()
+                if mid is None:
+                    break
                 async with vlm_semaphore:
                     try:
-                        # Check VLM cache first
                         vlm_cache_key = (video_path, mid)
                         if vlm_cache_key in vlm_cache:
                             action_results = vlm_cache[vlm_cache_key]
                         else:
-                            # Extract and analyze frame
                             with self._temp_frame(frame_extractor, video_path, mid, 'Phase 1.5') as (frame_tensor, frame_pil):
                                 if frame_pil is None:
-                                    break
-
+                                    refine_range.start_frame = mid + 1
+                                    continue
                             action_results = await vlm_analyze_function(frame_pil)
                             video_metadata["api_calls_made"] += 1
                             self._cache_vlm_result(vlm_cache, vlm_cache_key, action_results)
-
                         confidence = action_results.get(action_tag, 0.0)
                         is_present = confidence >= threshold
-
                         if is_present:
-                            # Action is present at this frame, search earlier
                             refined_start = mid
-                            right = mid - 1
+                            refine_range.end_frame = mid - 1
                         else:
-                            # Action is absent, search later
-                            left = mid + 1
-
+                            refine_range.start_frame = mid + 1
+                        refine_range.current_depth += 1
+                        if refine_range.current_depth % 5 == 0:
+                            gc.collect()
+                            self.logger.debug(f'Periodic GC at depth {refine_range.current_depth} for {action_tag} refinement')
                     except Exception as e:
-                        self.logger.error(f"Error refining start for {action_tag} at frame {mid}: {e}")
-                        break
+                        self.logger.error(f"Error refining {action_tag} at frame {mid}: {e}")
+                        refine_range.start_frame = mid + 1  # Skip problematic frame
 
             # Update segment with refined start
             if refined_start != detected_start:
