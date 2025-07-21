@@ -743,7 +743,9 @@ class ResultCompilationStage(BasePipelineStage):
         processed_frame_data = video_metadata["processed_frame_data"]
         candidate_segments = video_metadata.get("candidate_segments", [])
         fps = video_metadata["fps"]
-        use_timestamps = video_metadata["use_timestamps"]
+        use_timestamps = video_metadata["use_timestamps"] if "use_timestamps" in video_metadata else True
+        self.logger.debug(f"Compiling frame results for {len(processed_frame_data)} processed frames and {len(candidate_segments)} candidate segments")
+        self.logger.debug(f"FPS: {fps}, Use timestamps(bool): {use_timestamps}")
 
         # Start with all processed frames
         frame_results = []
