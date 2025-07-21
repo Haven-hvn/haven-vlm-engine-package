@@ -573,24 +573,46 @@ class EndDeterminationStage(BasePipelineStage):
             action_range.end_search_start = segment["start_frame"]
             action_range.end_search_end = total_frames - 1
             action_range.start_found = segment["start_frame"]
+            action_range.reset_depth_for_end_search()  # Explicitly reset depth for end search
             action_ranges.append(action_range)
+        # Log per-action depth information
+        for action_range in action_ranges:
+            search_range = action_range.end_search_end - action_range.end_search_start + 1 if action_range.end_search_end and action_range.end_search_start else 0
+            self.logger.info(f"Action '{action_range.action_tag}': max_depth={action_range.max_depth}, search_range={search_range}")
 
         # Initialize boundary detector and midpoint collector
         boundary_detector = ActionBoundaryDetector(threshold)
         midpoint_collector = AdaptiveMidpointCollector()
 
         iteration = 0
-        max_iterations = 50  # Safety limit
-
-        while self._has_unresolved_actions(action_ranges) and iteration < max_iterations:
+        # Replace with per-action depth check
+        while self._has_unresolved_actions(action_ranges) and self._has_actions_within_depth_limit(action_ranges):
             iteration += 1
+            # Guard against stalled searches
+            for action_range in action_ranges:
+                if not action_range.is_resolved() and action_range.searching_end:
+                    if (action_range.end_search_start is not None and 
+                        action_range.end_search_end is not None and
+                        action_range.end_search_end - action_range.end_search_start <= 1):
+                        self.logger.debug(f"Binary search window collapsed for {action_range.action_tag}, resolving")
+                        action_range.is_stalled = True
 
             # Collect midpoints for binary search
             midpoints = midpoint_collector.collect_unique_midpoints(action_ranges)
-
             if not midpoints:
                 self.logger.debug("No midpoints to process, ending Phase 2")
                 break
+            # Filter out already processed midpoints
+            unprocessed_midpoints = [idx for idx in midpoints if idx not in processed_frame_data]
+            if not unprocessed_midpoints:
+                # Re-apply existing results to advance search ranges
+                for frame_idx in midpoints:
+                    if frame_idx in processed_frame_data:
+                        action_results = processed_frame_data[frame_idx]["action_results"]
+                        boundary_detector.update_action_boundaries(
+                            action_ranges, frame_idx, action_results, total_frames
+                        )
+                continue
 
             # Process midpoint frames concurrently
             async def process_midpoint_frame(frame_idx: int) -> Optional[Dict[str, Any]]:
@@ -626,7 +648,7 @@ class EndDeterminationStage(BasePipelineStage):
                         return None
 
             # Process all midpoint frames concurrently
-            frame_tasks = [process_midpoint_frame(frame_idx) for frame_idx in midpoints]
+            frame_tasks = [process_midpoint_frame(frame_idx) for frame_idx in unprocessed_midpoints]
             concurrent_results = await asyncio.gather(*frame_tasks, return_exceptions=True)
 
             # Process results and update boundaries
@@ -644,6 +666,16 @@ class EndDeterminationStage(BasePipelineStage):
 
                 # Store frame result
                 processed_frame_data[frame_idx] = result
+
+        # Log per-action completion status after the loop
+        for action_range in action_ranges:
+            if action_range.is_resolved():
+                completion_reason = "boundary found"
+            elif action_range.has_reached_max_depth():
+                completion_reason = f"max depth {action_range.max_depth} reached"
+            else:
+                completion_reason = "still searching"
+            self.logger.info(f"Action '{action_range.action_tag}': depth {action_range.current_depth}/{action_range.max_depth}, {completion_reason}")
 
         # Update candidate segments with end boundaries
         for action_range in action_ranges:
@@ -673,6 +705,13 @@ class EndDeterminationStage(BasePipelineStage):
     def _has_unresolved_actions(self, action_ranges: List[ActionRange]) -> bool:
         """Check if there are still actions being searched"""
         return any(not action_range.is_resolved() for action_range in action_ranges)
+
+    def _has_actions_within_depth_limit(self, action_ranges: List[ActionRange]) -> bool:
+        """Check if any actions are still within their depth limits"""
+        return any(
+            not action_range.is_resolved() and not action_range.has_reached_max_depth()
+            for action_range in action_ranges
+        )
 
     @contextmanager
     def _temp_frame(self, frame_extractor, video_path, frame_idx, phase: str = ''):
