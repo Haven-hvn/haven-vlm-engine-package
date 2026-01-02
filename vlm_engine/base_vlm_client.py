@@ -15,7 +15,9 @@ class BaseVLMClient:
     def __init__(self, config: Dict[str, Any]):
         """Initialize common configuration shared by all VLM clients."""
         self.model_id: str = str(config["model_id"])
-        self.max_new_tokens: int = int(config.get("max_new_tokens", 128))
+        # Default to 131072 (128K tokens) - GLM max context length, good middle ground for modern models
+        # One-shot prompts have low risk, no context accumulation across frames
+        self.max_new_tokens: int = int(config.get("max_new_tokens", 131072))
         self.request_timeout: int = int(config.get("request_timeout", 70))
         self.vlm_detected_tag_confidence: float = float(config.get("vlm_detected_tag_confidence", 0.99))
         
