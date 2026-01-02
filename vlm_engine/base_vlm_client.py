@@ -102,14 +102,16 @@ class BaseVLMClient:
         if self.special_tokens:
             output_format = f"Format: comma-separated list or use special tokens {self.special_tokens['begin']}tag{self.special_tokens['end']} for each tag"
         prompt_text: str = (
-            f"Step 1: Describe what you see in this image objectively. Focus on visual evidence: actions, objects, scenes, positions, and relationships. Do not reference any tag list yet.\n\n"
-            f"Step 2: Based on your objective description from Step 1, identify which tags from this list match: {tag_list_str}.\n\n"
+            f"Analyze this image and identify what is present. Focus only on what you actually see, not what might be there.\n\n"
+            f"Step 1: Briefly describe the key visual elements: actions, objects, scenes, and relationships you observe.\n\n"
+            f"Step 2: From this tag list, list ONLY the tags that match what you described: {tag_list_str}\n"
+            f"Important: Only include tags that clearly match. Do not check every tag - focus on what's actually present.\n\n"
             f"Output format: {output_format}\n\n"
             f"Example:\n"
             f"Visual description: A person is sitting on a chair with a dog nearby | dog, sitting\n\n"
             f"Requirements:\n"
-            f"- First provide an objective visual description (before the | delimiter)\n"
-            f"- Then list matching tags exactly as they appear in the list above (after the | delimiter)\n"
+            f"- Keep the description concise (before the | delimiter)\n"
+            f"- List only matching tags exactly as they appear in the list (after the | delimiter)\n"
             f"- Use singular/base forms only (e.g., \"dog\" not \"dogs\")\n"
             f"- If no tags match, use: [description] | none"
         )
