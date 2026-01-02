@@ -1,9 +1,7 @@
 import asyncio
-import base64
-from io import BytesIO
-from PIL import Image
 import logging
 from typing import Dict, Any, Optional, List
+from PIL import Image
 import httpx
 from multiplexer_llm import (
     Multiplexer,
@@ -15,29 +13,22 @@ from multiplexer_llm import (
     ModelSelectionError,
 )
 from openai import AsyncOpenAI
+from .base_vlm_client import BaseVLMClient
 
 
-class MultiplexerVLMClient:
+class MultiplexerVLMClient(BaseVLMClient):
     """
     High-performance VLM client that uses multiplexer-llm for load balancing across multiple OpenAI-compatible endpoints.
     Features advanced async patterns, concurrency control, and optimized connection pooling.
     """
     
     def __init__(self, config: Dict[str, Any]):
-        self.model_id: str = str(config["model_id"])
-        self.max_new_tokens: int = int(config.get("max_new_tokens", 128))
-        self.request_timeout: int = int(config.get("request_timeout", 70))
-        self.vlm_detected_tag_confidence: float = float(config.get("vlm_detected_tag_confidence", 0.99))
+        super().__init__(config)
         
         # Performance optimization settings
         self.max_concurrent_requests: int = int(config.get("max_concurrent_requests", 20))
         self.connection_pool_size: int = int(config.get("connection_pool_size", 50))
         
-        self.tag_list: List[str] = config.get("tag_list")
-        if not self.tag_list:
-            raise ValueError("Configuration must provide a 'tag_list'.")
-        
-        self.logger: logging.Logger = logging.getLogger("logger")
         self.logger.debug(f"MultiplexerVLMClient initialized with {len(self.tag_list)} tags: {self.tag_list[:5]}...")
         
         # Extract multiplexer endpoints configuration
@@ -127,13 +118,6 @@ class MultiplexerVLMClient:
                 self.multiplexer = None
                 self._initialized = False
     
-    def _convert_image_to_base64_data_url(self, frame: Image.Image, format: str = "JPEG") -> str:
-        """Convert PIL Image to base64 data URL."""
-        buffered: BytesIO = BytesIO()
-        frame.save(buffered, format=format)
-        img_str: str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-        return f"data:image/{format.lower()};base64,{img_str}"
-    
     async def analyze_frame(self, frame: Optional[Image.Image]) -> Dict[str, float]:
         """
         Analyze a frame using the multiplexer with concurrency control and proper exception handling.
@@ -154,6 +138,8 @@ class MultiplexerVLMClient:
                 self.logger.error(f"Failed to convert image to base64: {e_convert}", exc_info=True)
                 return {tag: 0.0 for tag in self.tag_list}
             
+            prompt_text: str = self._build_prompt_text()
+            
             messages: List[Dict[str, Any]] = [
                 {
                     "role": "user",
@@ -161,7 +147,7 @@ class MultiplexerVLMClient:
                         {"type": "image_url", "image_url": {"url": image_data_url}},
                         {
                             "type": "text",
-                            "text": "What is happening in this scene?",
+                            "text": prompt_text,
                         },
                     ],
                 }
@@ -212,27 +198,6 @@ class MultiplexerVLMClient:
             except Exception as e:
                 self.logger.error(f"Unexpected error during frame analysis: {e}", exc_info=True)
                 return {tag: 0.0 for tag in self.tag_list}
-    
-    def _parse_simple_default(self, reply: str) -> Dict[str, float]:
-        """Parse VLM response to extract detected tags."""
-        found: Dict[str, float] = {tag: 0.0 for tag in self.tag_list}
-        
-        # First strip the entire reply to remove leading/trailing whitespace
-        reply = reply.strip()
-        
-        # Split by comma and strip each tag
-        parsed_vlm_tags: List[str] = [tag.strip().lower() for tag in reply.split(',') if tag.strip()]
-        
-        # Log the parsed tags for debugging
-        self.logger.debug(f"VLM raw reply: '{reply}'")
-        self.logger.debug(f"Parsed VLM tags (lowercase): {parsed_vlm_tags}")
-        
-        for tag_config_original_case in self.tag_list:
-            if tag_config_original_case.lower() in parsed_vlm_tags:
-                found[tag_config_original_case] = self.vlm_detected_tag_confidence
-                self.logger.debug(f"Matched tag: '{tag_config_original_case}' with confidence {self.vlm_detected_tag_confidence}")
-        
-        return found
     
     async def __aenter__(self):
         """Async context manager entry."""

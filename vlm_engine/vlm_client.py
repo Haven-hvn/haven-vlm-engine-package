@@ -1,14 +1,12 @@
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-import base64
-from io import BytesIO
-from PIL import Image
 import logging
-import os
 import random
 import time
-from typing import Dict, Any, Optional, List, Tuple, TextIO
+from typing import Dict, Any, Optional, List, Tuple
+from PIL import Image
+from .base_vlm_client import BaseVLMClient
 
 class RetryWithJitter(Retry):
     def __init__(self, *args: Any, jitter_factor: float = 0.25, **kwargs: Any):
@@ -30,22 +28,13 @@ class RetryWithJitter(Retry):
         
         time.sleep(max(0, sleep_duration))
 
-class OpenAICompatibleVLMClient:
+class OpenAICompatibleVLMClient(BaseVLMClient):
     def __init__(
         self,
         config: Dict[str, Any],
     ):
+        super().__init__(config)
         self.api_base_url: str = str(config["api_base_url"]).rstrip('/')
-        self.model_id: str = str(config["model_id"])
-        self.max_new_tokens: int = int(config.get("max_new_tokens", 128))
-        self.request_timeout: int = int(config.get("request_timeout", 70))
-        self.vlm_detected_tag_confidence: float = float(config.get("vlm_detected_tag_confidence", 0.99))
-        
-        self.tag_list: List[str] = config.get("tag_list")
-        if not self.tag_list:
-            raise ValueError("Configuration must provide a 'tag_list'.")
-
-        self.logger: logging.Logger = logging.getLogger("logger")
         self.logger.debug(f"VLM Client initialized with {len(self.tag_list)} tags: {self.tag_list[:5]}...")  # Show first 5 tags
 
         retry_attempts: int = int(config.get("retry_attempts", 3))
@@ -73,12 +62,6 @@ class OpenAICompatibleVLMClient:
         )
         self.logger.info(f"OpenAI VLM client initialized successfully")
 
-    def _convert_image_to_base64_data_url(self, frame: Image.Image, format: str = "JPEG") -> str:
-        buffered: BytesIO = BytesIO()
-        frame.save(buffered, format=format)
-        img_str: str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-        return f"data:image/{format.lower()};base64,{img_str}"
-
     async def analyze_frame(self, frame: Optional[Image.Image]) -> Dict[str, float]:
         tag: str
         if not frame:
@@ -91,7 +74,8 @@ class OpenAICompatibleVLMClient:
             self.logger.error(f"Failed to convert image to base64: {e_convert}", exc_info=True)
             return {tag: 0.0 for tag in self.tag_list}
 
-        tags_str: str = ", ".join(self.tag_list)
+        prompt_text: str = self._build_prompt_text()
+        
         messages: List[Dict[str, Any]] = [
             {
                 "role": "user",
@@ -99,9 +83,7 @@ class OpenAICompatibleVLMClient:
                     {"type": "image_url", "image_url": {"url": image_data_url}},
                     {
                         "type": "text",
-                        "text": (
-                            f"What is happening in this scene?"
-                        ),
+                        "text": prompt_text,
                     },
                 ],
             }
@@ -141,23 +123,3 @@ class OpenAICompatibleVLMClient:
             return {tag: 0.0 for tag in self.tag_list}
 
         return self._parse_simple_default(raw_reply)
-
-    def _parse_simple_default(self, reply: str) -> Dict[str, float]:
-        found: Dict[str, float] = {tag: 0.0 for tag in self.tag_list}
-        
-        # First strip the entire reply to remove leading/trailing whitespace
-        reply = reply.strip()
-        
-        # Split by comma and strip each tag
-        parsed_vlm_tags: List[str] = [tag.strip().lower() for tag in reply.split(',') if tag.strip()]
-        
-        # Log the parsed tags for debugging
-        self.logger.debug(f"VLM raw reply: '{reply}'")
-        self.logger.debug(f"Parsed VLM tags (lowercase): {parsed_vlm_tags}")
-
-        for tag_config_original_case in self.tag_list:
-            if tag_config_original_case.lower() in parsed_vlm_tags:
-                found[tag_config_original_case] = self.vlm_detected_tag_confidence
-                self.logger.debug(f"Matched tag: '{tag_config_original_case}' with confidence {self.vlm_detected_tag_confidence}")
-        
-        return found
