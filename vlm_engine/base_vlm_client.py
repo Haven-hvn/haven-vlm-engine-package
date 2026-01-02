@@ -73,23 +73,40 @@ class BaseVLMClient:
         return ", ".join(self.tag_list)
 
     def _extract_from_special_tokens(self, reply: str) -> str:
-        """Extract content from special tokens. Only if special_tokens config is provided (model-specific)."""
-        # Only extract if special tokens are configured (model-specific approach)
-        if not self.special_tokens:
-            return reply
+        """
+        Extract content from special tokens.
+        First tries configured special_tokens if provided, then falls back to detecting common patterns.
+        This makes the parser dynamic to handle different models even without explicit configuration.
+        """
+        # Try configured special tokens first (model-specific)
+        if self.special_tokens:
+            begin_token: Optional[str] = self.special_tokens.get("begin")
+            end_token: Optional[str] = self.special_tokens.get("end")
+            
+            if begin_token and end_token:
+                # Extract all content between begin and end tokens
+                pattern: str = re.escape(begin_token) + r'(.*?)' + re.escape(end_token)
+                matches: List[str] = re.findall(pattern, reply, re.DOTALL)
+                if matches:
+                    # Join all extracted content with spaces
+                    return ' '.join(matches)
         
-        begin_token: Optional[str] = self.special_tokens.get("begin")
-        end_token: Optional[str] = self.special_tokens.get("end")
+        # Fallback: Detect common special token patterns even if not configured
+        # This makes the parser work with models like GLM that use special tokens by default
+        common_patterns: List[tuple[str, str]] = [
+            (r'<\|begin_of_box\|>', r'<\|end_of_box\|>'),  # GLM pattern
+            (r'<\|beginoftext\|>', r'<\|endoftext\|>'),     # Common pattern
+            (r'\[START\]', r'\[END\]'),                     # Simple pattern
+        ]
         
-        if begin_token and end_token:
-            # Extract all content between begin and end tokens
-            pattern: str = re.escape(begin_token) + r'(.*?)' + re.escape(end_token)
+        for begin_pattern, end_pattern in common_patterns:
+            pattern: str = begin_pattern + r'(.*?)' + end_pattern
             matches: List[str] = re.findall(pattern, reply, re.DOTALL)
             if matches:
-                # Join all extracted content with spaces
+                # Found a match, return extracted content
                 return ' '.join(matches)
         
-        # No special tokens configured or no matches found
+        # No special tokens found
         return reply
 
     def _build_prompt_text(self) -> str:
@@ -135,16 +152,16 @@ class BaseVLMClient:
             return found
         
         # PRIMARY PATH: Simple split-based parsing (exact format as demanded)
-        # Step 2: Extract tags section (after | delimiter if present, or entire response)
-        content: str = reply
-        if '|' in reply:
+        # Step 2: Extract content from special tokens FIRST (if configured)
+        # This handles cases where special tokens contain the structured format
+        content: str = self._extract_from_special_tokens(reply)
+        
+        # Step 3: Extract tags section (after | delimiter if present, or use entire content)
+        if '|' in content:
             # Extract content after | delimiter (tags section)
-            parts: List[str] = reply.split('|', 1)
+            parts: List[str] = content.split('|', 1)
             if len(parts) > 1:
                 content = parts[1].strip()  # Get tags part after delimiter
-        
-        # Step 3: Extract content from special tokens if configured
-        content = self._extract_from_special_tokens(content)
         
         # Step 4: Simple comma-split parsing (primary path)
         tags_found_primary: bool = False
