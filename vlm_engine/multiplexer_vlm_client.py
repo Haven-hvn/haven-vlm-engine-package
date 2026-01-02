@@ -159,7 +159,7 @@ class MultiplexerVLMClient(BaseVLMClient):
                     model=self.model_id,
                     messages=messages,
                     max_tokens=self.max_new_tokens,
-                    temperature=0.0,
+                    temperature=0.8,
                     timeout=self.request_timeout
                 )
                 
