@@ -111,6 +111,18 @@ class OpenAICompatibleVLMClient(BaseVLMClient):
             response_data: Dict[str, Any] = response.json()
             if response_data.get("choices") and response_data["choices"][0].get("message"):
                 raw_reply = response_data["choices"][0]["message"].get("content", "")
+                
+                # Log warning if response is empty (model generated no content)
+                if not raw_reply or not raw_reply.strip():
+                    finish_reason: Optional[str] = response_data.get("choices", [{}])[0].get("finish_reason")
+                    usage: Dict[str, Any] = response_data.get("usage", {})
+                    completion_tokens: int = usage.get("completion_tokens", 0)
+                    self.logger.warning(
+                        f"Received empty response from API. "
+                        f"Finish reason: {finish_reason}, "
+                        f"Completion tokens: {completion_tokens}. "
+                        f"This may indicate content filtering, model refusal, or generation issues."
+                    )
             else:
                 self.logger.error(f"Unexpected response structure from API: {response_data}")
                 return {tag: 0.0 for tag in self.tag_list}

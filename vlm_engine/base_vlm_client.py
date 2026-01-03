@@ -114,22 +114,26 @@ class BaseVLMClient:
         # Format tag list for prompt
         tag_list_str: str = self._format_tag_list_for_prompt()
         
-        # Build simple, direct pattern-matching prompt
-        output_format: str = "Format: comma-separated list (e.g., \"tag1, tag2\")"
+        # Build improved prompt with clearer instructions and structure
+        output_format: str = "[description] | [tag1, tag2] or [description] | none"
         if self.special_tokens:
-            output_format = f"Format: comma-separated list or use special tokens {self.special_tokens['begin']}tag{self.special_tokens['end']} for each tag"
+            output_format = f"[description] | [tag1, tag2] or use special tokens {self.special_tokens['begin']}tag{self.special_tokens['end']} for each tag"
+        
         prompt_text: str = (
-            f"Analyze this image and identify what is present. Focus only on what you actually see, not what might be there.\n\n"
-            f"Step 1: Briefly describe the key visual elements: actions, objects, scenes, and relationships you observe.\n\n"
-            f"Step 2: From this tag list, list ONLY the tags that match what you described: {tag_list_str}\n"
-            f"Important: Only include tags that clearly match. Do not check every tag - focus on what's actually present.\n\n"
+            f"Analyze this image and identify what is present. Focus ONLY on what you actually see, not what might be there.\n\n"
+            f"Step 1: Briefly describe the key visual elements (MAX 15 WORDS): actions, objects, scenes, and relationships you observe.\n"
+            f"Do not over-analyze or interpret beyond visual evidence.\n\n"
+            f"Step 2: From this tag list, list ONLY the tags that EXACTLY match what you described: {tag_list_str}\n"
+            f"Important:\n"
+            f"- Only include tags for CLEARLY VISIBLE content that matches the tag definition\n"
+            f"- Tags must match EXACTLY - do not apply tags to similar but different content\n"
+            f"- Do not check every tag - focus only on what's actually present\n"
+            f"- If no tags match, use \"none\"\n\n"
             f"Output format: {output_format}\n\n"
-            f"Example:\n"
-            f"Visual description: A person is sitting on a chair with a dog nearby | dog, sitting\n\n"
             f"Requirements:\n"
-            f"- Keep the description concise (before the | delimiter)\n"
+            f"- Keep the description concise (MAX 15 WORDS, before the | delimiter)\n"
             f"- List only matching tags exactly as they appear in the list (after the | delimiter)\n"
-            f"- Use singular/base forms only (e.g., \"dog\" not \"dogs\")\n"
+            f"- Use comma-separated format for multiple tags\n"
             f"- If no tags match, use: [description] | none"
         )
         return prompt_text
@@ -162,6 +166,12 @@ class BaseVLMClient:
             parts: List[str] = content.split('|', 1)
             if len(parts) > 1:
                 content = parts[1].strip()  # Get tags part after delimiter
+        
+        # Step 3.5: Handle "none" after delimiter (explicit "no tags" case)
+        if content:
+            normalized_content_check: str = content.lower().strip()
+            if normalized_content_check in ['none', 'nothing', 'no tags', 'n/a', 'na']:
+                return found
         
         # Step 4: Simple comma-split parsing (primary path)
         tags_found_primary: bool = False

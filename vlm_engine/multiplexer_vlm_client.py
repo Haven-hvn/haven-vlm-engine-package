@@ -165,7 +165,22 @@ class MultiplexerVLMClient(BaseVLMClient):
                 
                 if completion.choices and completion.choices[0].message:
                     raw_reply = completion.choices[0].message.content or ""
-                    self.logger.debug(f"Received response from multiplexer: {raw_reply[:100]}...")
+                    
+                    # Log warning if response is empty (model generated no content)
+                    if not raw_reply or not raw_reply.strip():
+                        finish_reason: Optional[str] = getattr(completion.choices[0], "finish_reason", None)
+                        usage: Optional[Any] = getattr(completion, "usage", None)
+                        completion_tokens: int = 0
+                        if usage:
+                            completion_tokens = getattr(usage, "completion_tokens", 0)
+                        self.logger.warning(
+                            f"Received empty response from multiplexer. "
+                            f"Finish reason: {finish_reason}, "
+                            f"Completion tokens: {completion_tokens}. "
+                            f"This may indicate content filtering, model refusal, or generation issues."
+                        )
+                    else:
+                        self.logger.debug(f"Received response from multiplexer: {raw_reply[:100]}...")
                     return self._parse_simple_default(raw_reply)
                 else:
                     self.logger.error(f"Unexpected response structure from multiplexer: {completion}")
