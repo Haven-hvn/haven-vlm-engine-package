@@ -115,26 +115,28 @@ class BaseVLMClient:
         tag_list_str: str = self._format_tag_list_for_prompt()
         
         # Build improved prompt with clearer instructions and structure
-        output_format: str = "[description] | [tag1, tag2] or [description] | none"
+        output_format: str = "[description] | [single_tag] or [description] | none"
         if self.special_tokens:
-            output_format = f"[description] | [tag1, tag2] or use special tokens {self.special_tokens['begin']}tag{self.special_tokens['end']} for each tag"
+            output_format = f"[description] | [single_tag] or use special tokens {self.special_tokens['begin']}tag{self.special_tokens['end']} for the tag"
         
         prompt_text: str = (
             f"Analyze this image and identify what is present. Focus ONLY on what you actually see, not what might be there.\n\n"
             f"Step 1: Briefly describe the key visual elements (MAX 15 WORDS): actions, objects, scenes, and relationships you observe.\n"
             f"Do not over-analyze or interpret beyond visual evidence.\n\n"
-            f"Step 2: From this tag list, list ALL tags that EXACTLY match what you described: {tag_list_str}\n"
+            f"Step 2: From this tag list, select the SINGLE BEST tag that EXACTLY matches what you described: {tag_list_str}\n"
             f"Important:\n"
-            f"- Include ALL tags that match - return multiple tags if multiple things are clearly visible\n"
-            f"- Only include tags for CLEARLY VISIBLE content that matches the tag definition\n"
+            f"- Select ONLY ONE tag - the most appropriate tag for this frame\n"
+            f"- Prefer MORE SPECIFIC tags over general ones (e.g., 'dribbling' over 'basketball', 'jump shot' over 'shooting')\n"
+            f"- If tags are mutually exclusive (e.g., 'defense' vs 'offense'), select the one that is actually happening\n"
+            f"- Choose the tag that is MOST REPRESENTATIVE of what's clearly visible in this frame\n"
+            f"- Only include a tag if it CLEARLY matches the tag definition\n"
             f"- Tags must match EXACTLY - do not apply tags to similar but different content\n"
             f"- Do not check every tag - focus only on what's actually present\n"
             f"- If no tags match, use \"none\"\n\n"
             f"Output format: {output_format}\n\n"
             f"Requirements:\n"
             f"- Keep the description concise (MAX 15 WORDS, before the | delimiter)\n"
-            f"- List all matching tags exactly as they appear in the list (after the | delimiter)\n"
-            f"- Use comma-separated format for multiple tags\n"
+            f"- Select exactly one tag that appears in the list (after the | delimiter)\n"
             f"- If no tags match, use: [description] | none"
         )
         return prompt_text
