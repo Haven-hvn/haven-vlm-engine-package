@@ -1,6 +1,7 @@
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from urllib3.response import BaseHTTPResponse
 import logging
 import random
 import time
@@ -17,15 +18,16 @@ class RetryWithJitter(Retry):
                 f"RetryWithJitter initialized with jitter_factor={self.jitter_factor}, which is outside the typical [0, 1] range."
             )
 
-    def sleep(self, backoff_value: float) -> None:
+    def sleep(self, response: BaseHTTPResponse | None = None) -> None:
         retry_after: Optional[float] = self.get_retry_after(response=self._last_response)
         if retry_after:
             time.sleep(retry_after)
             return
 
+        backoff_value: float = self.get_backoff_time()
         jitter: float = random.uniform(0, backoff_value * self.jitter_factor)
         sleep_duration: float = backoff_value + jitter
-        
+
         time.sleep(max(0, sleep_duration))
 
 class OpenAICompatibleVLMClient(BaseVLMClient):
