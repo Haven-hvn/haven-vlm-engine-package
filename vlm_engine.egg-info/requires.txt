@@ -7,4 +7,4 @@ pyyaml
 opencv-python
 decord
 requests
-multiplexer-llm==0.1.6
+multiplexer-llm==0.1.7
