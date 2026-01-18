@@ -4,8 +4,8 @@ from typing import List, Dict, Optional, Union, Tuple, Any
 class ModelConfig(BaseModel):
     type: str
     max_queue_size: Optional[int] = None
-    max_batch_size: int = 1
-    instance_count: int = 1
+    max_batch_size: int = 5
+    instance_count: int = 5
     model_threshold: Optional[float] = 0.5
     model_return_tags: bool = True
     model_return_confidence: bool = True
