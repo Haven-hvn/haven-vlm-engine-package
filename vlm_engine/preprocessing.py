@@ -9,10 +9,17 @@ from PIL import Image as PILImage
 
 is_macos_arm = sys.platform == 'darwin' and platform.machine() == 'arm64'
 
-if is_macos_arm:
-    import av
-else:
-    import decord
+try:
+    import decord  # type: ignore
+except ImportError:
+    decord = None
+try:
+    import av  # type: ignore
+except ImportError:
+    av = None
+
+# Import bridge set for decord
+if decord is not None:
     decord.bridge.set_bridge('torch')
 
 def custom_round(number: float) -> int:
@@ -20,6 +27,82 @@ def custom_round(number: float) -> int:
         return int(number) + 1
     else:
         return int(number)
+
+def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None) -> Tuple[float, int]:
+    """
+    Get video FPS and total frames with robust error handling and fallback.
+    
+    Tries PyAV first (cross-platform), then falls back to decord.
+    Provides detailed error diagnostics if both fail.
+    
+    Args:
+        video_path: Path to the video file
+        logger: Optional logger instance for logging
+        
+    Returns:
+        Tuple of (fps, total_frames)
+        
+    Raises:
+        ValueError: If video file is invalid or cannot be read by either library
+    """
+    import os
+    
+    if logger is None:
+        logger = logging.getLogger("logger")
+    
+    # Validate file exists
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+    
+    file_size = os.path.getsize(video_path)
+    logger.info(f"Processing video: {video_path} ({file_size / 1024 / 1024:.2f} MB)")
+    
+    # Strategy 1: Try PyAV first (works on all platforms)
+    if av is not None:
+        try:
+            container = av.open(video_path)
+            if not container.streams.video:
+                raise ValueError(f"No video stream found in: {video_path}")
+            stream = container.streams.video[0]
+            fps = float(stream.average_rate)
+            total_frames = stream.frames if stream.frames > 0 else int(stream.duration * fps / stream.time_base)
+            container.close()
+            logger.info(f"Using PyAV for video metadata: {fps} fps, {total_frames} frames")
+            return fps, total_frames
+        except Exception as e:
+            logger.debug(f"PyAV metadata extraction failed: {e}")
+    
+    # Strategy 2: Fallback to decord
+    if decord is None:
+        raise ImportError("Neither PyAV nor decord available for video processing")
+    
+    try:
+        vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
+        fps = float(vr.get_avg_fps())
+        total_frames = len(vr)
+        del vr
+        logger.info(f"Using decord for video metadata: {fps} fps, {total_frames} frames")
+        return fps, total_frames
+    except Exception as decord_error:
+        logger.error(f"Decord failed to read video {video_path}: {decord_error}")
+        
+        # Provide detailed diagnostics
+        error_details = []
+        error_details.append(f"Video path: {video_path}")
+        error_details.append(f"File exists: {os.path.exists(video_path)}")
+        error_details.append(f"File size: {file_size} bytes")
+        
+        if os.path.exists(video_path):
+            # Try to get basic file info
+            with open(video_path, 'rb') as f:
+                header = f.read(16)
+                error_details.append(f"File header (hex): {header.hex()}")
+        
+        logger.error("; ".join(error_details))
+        raise ValueError(
+            f"Failed to read video with both PyAV and decord: {video_path}. "
+            f"See debug logs for file diagnostics."
+        ) from decord_error
 
 def get_video_duration_decord(video_path: str) -> float:
     try:

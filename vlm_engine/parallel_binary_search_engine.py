@@ -19,16 +19,7 @@ from .action_range import ActionRange
 from .adaptive_midpoint_collector import AdaptiveMidpointCollector
 from .action_boundary_detector import ActionBoundaryDetector
 from .video_frame_extractor import VideoFrameExtractor
-from .preprocessing import get_video_duration_decord, is_macos_arm
-
-try:
-    import decord  # type: ignore
-except ImportError:
-    decord = None
-try:
-    import av  # type: ignore
-except ImportError:
-    av = None
+from .preprocessing import get_video_duration_decord, is_macos_arm, get_video_metadata
 
 class ParallelBinarySearchEngine:
     """
@@ -122,22 +113,8 @@ class ParallelBinarySearchEngine:
         """
         self._call_progress(0)
         
-        # Get video metadata
-        if is_macos_arm:
-            if av is None:
-                raise ImportError("PyAV is required on macOS ARM")
-            container = av.open(video_path)
-            stream = container.streams.video[0]
-            fps = float(stream.average_rate)
-            total_frames = stream.frames or 0
-            container.close()
-        else:
-            if decord is None:
-                raise ImportError("Decord is required on this platform")
-            vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
-            fps = vr.get_avg_fps()
-            total_frames = len(vr)
-            del vr
+        # Get video metadata with robust error handling and fallback
+        fps, total_frames = get_video_metadata(video_path, self.logger)
         
         if total_frames == 0 or fps == 0:
             self.logger.error(f"Invalid video metadata: {total_frames} frames, {fps} fps")
