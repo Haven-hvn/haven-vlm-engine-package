@@ -23,7 +23,7 @@ Requires-Dist: pyyaml
 Requires-Dist: opencv-python
 Requires-Dist: decord
 Requires-Dist: requests
-Requires-Dist: multiplexer-llm==0.1.7
+Requires-Dist: multiplexer-llm==0.2.0
 Dynamic: author
 Dynamic: author-email
 Dynamic: classifier

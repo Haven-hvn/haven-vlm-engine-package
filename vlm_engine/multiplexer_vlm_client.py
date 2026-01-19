@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import warnings
 from typing import Dict, Any, Optional, List
 from PIL import Image
 import httpx
@@ -19,7 +20,12 @@ from .base_vlm_client import BaseVLMClient
 class MultiplexerVLMClient(BaseVLMClient):
     """
     High-performance VLM client that uses multiplexer-llm for load balancing across multiple OpenAI-compatible endpoints.
-    Features advanced async patterns, concurrency control, and optimized connection pooling.
+    
+    NEW ARCHITECTURE:
+    - Concurrency control has moved from network layer (httpx limits) to application layer (native slot reservation)
+    - Intelligent overflow routing, immediate self-healing rebalancing, and weighted distribution preservation under load
+    - The Global Semaphore (self.semaphore) remains the primary guard against system-wide overload
+    - Per-endpoint concurrency limits are now configured via max_concurrent parameter
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -27,7 +33,19 @@ class MultiplexerVLMClient(BaseVLMClient):
         
         # Performance optimization settings
         self.max_concurrent_requests: int = int(config.get("max_concurrent_requests", 20))
-        self.connection_pool_size: int = int(config.get("connection_pool_size", 50))
+        
+        # connection_pool_size is deprecated - multiplexer now handles connection management
+        # Keeping for backward compatibility but it's no longer used for controlling concurrency
+        # Only warn if user explicitly set this parameter (not just using default value)
+        if "connection_pool_size" in config:
+            connection_pool_size_val = int(config.get("connection_pool_size", 50))
+            if connection_pool_size_val != 50:
+                warnings.warn(
+                    "connection_pool_size parameter is deprecated: The multiplexer now manages connection pools internally. "
+                    "This parameter will be removed in a future version.",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
         
         self.logger.debug(f"MultiplexerVLMClient initialized with {len(self.tag_list)} tags: {self.tag_list[:5]}...")
         
@@ -37,46 +55,54 @@ class MultiplexerVLMClient(BaseVLMClient):
             raise ValueError("Configuration must provide 'multiplexer_endpoints' for multiplexer mode.")
         
         # Initialize concurrency control
-        self.semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+        self.semaphore = asyncio.Semaphore(self.max_concurrent_requests)  # Global admission control
         self.multiplexer: Optional[Multiplexer] = None
         self._initialized = False
         
         self.logger.info(
             f"Initializing high-performance MultiplexerVLMClient for model {self.model_id} "
             f"with {len(self.tag_list)} tags, {len(self.multiplexer_endpoints)} endpoints, "
-            f"max_concurrent: {self.max_concurrent_requests}, pool_size: {self.connection_pool_size}"
+            f"global_max_concurrent: {self.max_concurrent_requests}"
         )
     
     async def _ensure_initialized(self):
-        """Ensure the multiplexer is initialized. Called before each request."""
+        """Ensure the multiplexer is initialized. Called before each request.
+        
+        This method is idempotent - safe to call multiple times. It will only initialize once
+        and subsequent calls will be no-ops due to the _initialized flag check.
+        """
         if not self._initialized:
             await self._initialize_multiplexer()
     
     async def _initialize_multiplexer(self):
-        """Initialize the multiplexer with configured endpoints and optimized connection pooling."""
+        """Initialize the multiplexer with configured endpoints and application-layer concurrency control."""
         if self._initialized:
             return
             
-        self.logger.info("Initializing high-performance multiplexer with connection pooling...")
-        
-        # Configure HTTP client with optimized connection pooling
-        limits = httpx.Limits(
-            max_keepalive_connections=self.connection_pool_size,
-            max_connections=self.connection_pool_size * 2,
-            keepalive_expiry=30.0
-        )
+        self.logger.info("Initializing high-performance multiplexer with application-layer concurrency control...")
         
         # Create multiplexer instance
         self.multiplexer = Multiplexer()
         await self.multiplexer.__aenter__()
         
-        # Add endpoints to multiplexer with optimized clients
+        # Add endpoints to multiplexer with per-endpoint concurrency control
+        # Move httpx limits calculation inside endpoint loop for per-node optimization
         for i, endpoint_config in enumerate(self.multiplexer_endpoints):
             try:
-                # Create optimized HTTP client for this endpoint
-                http_client = httpx.AsyncClient(
+                # Calculate per-endpoint connection limits based on that specific node's capacity
+                # Use per-endpoint max_concurrent for sizing, with reasonable default for pipelining
+                per_node_max_concurrent = endpoint_config.get("max_concurrent", 3)  # Default to 3 for pipelining
+                limit_buffer = 5  # Small safety buffer since per-node limits
+                per_node_limits = httpx.Limits(
+                    max_keepalive_connections=per_node_max_concurrent + limit_buffer,
+                    max_connections=(per_node_max_concurrent * 2) + limit_buffer,
+                    keepalive_expiry=30.0
+                )
+                
+                # Create HTTP client with per-node connection limits
+                http_client: httpx.AsyncClient = httpx.AsyncClient(
                     timeout=httpx.Timeout(self.request_timeout),
-                    limits=limits
+                    limits=per_node_limits  # Per-node limits instead of global hardcoded values
                 )
                 
                 # Create AsyncOpenAI client with optimized HTTP client
@@ -91,20 +117,24 @@ class MultiplexerVLMClient(BaseVLMClient):
                 weight = endpoint_config.get("weight", 1)
                 name = endpoint_config.get("name", f"endpoint-{i}")
                 is_fallback = endpoint_config.get("is_fallback", False)
+                # NEW: Extract max_concurrent from endpoint config (defaults to None for unlimited)
+                max_concurrent = endpoint_config.get("max_concurrent")
                 
                 if is_fallback:
-                    self.multiplexer.add_fallback_model(client, weight, name)
-                    self.logger.info(f"Added fallback endpoint: {name} (weight: {weight})")
+                    self.multiplexer.add_fallback_model(client, weight, name, max_concurrent=max_concurrent)
+                    self.logger.info(f"Added fallback endpoint: {name} (weight: {weight}, max_concurrent: {max_concurrent or 'unlimited'})")
                 else:
-                    self.multiplexer.add_model(client, weight, name)
-                    self.logger.info(f"Added primary endpoint: {name} (weight: {weight})")
+                    self.multiplexer.add_model(client, weight, name, max_concurrent=max_concurrent)
+                    self.logger.info(f"Added primary endpoint: {name} (weight: {weight}, max_concurrent: {max_concurrent or 'unlimited'})")
                     
             except Exception as e:
                 self.logger.error(f"Failed to add endpoint {endpoint_config}: {e}")
                 raise
         
         self._initialized = True
-        self.logger.info(f"Multiplexer initialization completed with {len(self.multiplexer_endpoints)} endpoints and connection pooling")
+        self.logger.info(
+            f"Multiplexer initialization completed with {len(self.multiplexer_endpoints)} endpoints and application-layer concurrency control"
+        )
     
     async def _cleanup_multiplexer(self):
         """Cleanup multiplexer resources."""
@@ -121,13 +151,19 @@ class MultiplexerVLMClient(BaseVLMClient):
     async def analyze_frame(self, frame: Optional[Image.Image]) -> Dict[str, float]:
         """
         Analyze a frame using the multiplexer with concurrency control and proper exception handling.
-        Features advanced async patterns and optimized performance.
+        
+        Features:
+        - Global admission control via semaphore (system chokehold)
+        - Application-layer concurrency control via Multiplexer max_concurrent
+        - Intelligent overflow routing when endpoints hit capacity
+        - Immediate self-healing rebalancing
+        - Preserved weighted distribution under normal load
         """
         if not frame:
             self.logger.warning("analyze_frame called with no frame.")
             return {tag: 0.0 for tag in self.tag_list}
         
-        # Use semaphore for concurrency control
+        # Use semaphore for GLOBAL admission control (system chokehold)
         async with self.semaphore:
             # Ensure multiplexer is initialized
             await self._ensure_initialized()

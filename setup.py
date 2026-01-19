@@ -20,7 +20,7 @@ setup(
         "opencv-python",
         "decord",
         "requests",
-        "multiplexer-llm==0.1.7"
+        "multiplexer-llm==0.2.0"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
