@@ -16,7 +16,7 @@ The multiplexer integration allows you to:
 The multiplexer-llm package is automatically installed as a dependency:
 
 ```bash
-pip install vlm_engine  # Includes multiplexer-llm==0.2.0
+pip install vlm_engine  # Includes multiplexer-llm==0.2.1
 ```
 
 ## Configuration
