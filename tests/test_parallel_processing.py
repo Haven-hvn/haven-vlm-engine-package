@@ -51,7 +51,7 @@ async def test_parallel_processing():
         
         # Create engine configuration
         engine_config = EngineConfig(
-            active_ai_models=["vlm_nsfw_model"],
+            active_ai_models=["llm_vlm_model"],
             pipelines={
                 "video_pipeline_dynamic": PipelineConfig(
                     inputs=[
@@ -81,9 +81,9 @@ async def test_parallel_processing():
                     max_batch_size=1,
                     max_concurrent_requests=20,
                 ),
-                "vlm_nsfw_model": ModelConfig(
+                "llm_vlm_model": ModelConfig(
                     type="vlm_model",
-                    model_file_name="vlm_nsfw_model",
+                    model_file_name="llm_vlm_model",
                     model_category="actiondetection",
                     model_id="Haven-adult",
                     model_identifier=93848,

@@ -153,7 +153,7 @@ from vlm_engine.config_models import EngineConfig, PipelineConfig, ModelConfig
 
 async def main():
     engine_config = EngineConfig(
-        active_ai_models=["vlm_nsfw_model"],
+        active_ai_models=["llm_vlm_model"],
         pipelines={
             "video_pipeline_dynamic": PipelineConfig(
                 inputs=["video_path", "return_timestamps", "time_interval", 
@@ -179,7 +179,7 @@ async def main():
                 type="binary_search_processor",
                 model_file_name="binary_search_processor_dynamic"
             ),
-            "vlm_nsfw_model": ModelConfig(
+            "llm_vlm_model": ModelConfig(
                 type="vlm_model",
                 model_category="actiondetection",
                 tag_list=["Action1", "Action2", "Action3"],  # Actions to search

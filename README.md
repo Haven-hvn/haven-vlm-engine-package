@@ -42,9 +42,9 @@ from vlm_engine.config_models import EngineConfig, ModelConfig
 
 # Configure the engine
 config = EngineConfig(
-    active_ai_models=["vlm_nsfw_model"],
+    active_ai_models=["llm_vlm_model"],
     models={
-        "vlm_nsfw_model": ModelConfig(
+        "llm_vlm_model": ModelConfig(
             type="vlm_model",
             model_id="HuggingFaceTB/SmolVLM-Instruct",
             api_base_url="http://localhost:7045",

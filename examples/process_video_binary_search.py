@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.ERROR)
 async def main():
     # Define the configuration for the engine with Binary Search Processor
     engine_config = EngineConfig(
-        active_ai_models=["vlm_nsfw_model"],
+        active_ai_models=["llm_vlm_model"],
         pipelines={
             "video_pipeline_dynamic": PipelineConfig(
                 inputs=[
@@ -44,9 +44,9 @@ async def main():
                 max_batch_size=1,            # Process one video at a time for better concurrency
                 max_concurrent_requests=20,  # Allow concurrent video processing
             ),
-            "vlm_nsfw_model": ModelConfig(
+            "llm_vlm_model": ModelConfig(
                 type="vlm_model",
-                model_file_name="vlm_nsfw_model",
+                model_file_name="llm_vlm_model",
                 model_category="actiondetection",
                 model_id="Haven-adult",
                 model_identifier=93848,

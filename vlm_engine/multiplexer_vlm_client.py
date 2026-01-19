@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import warnings
+import time
+import json
 from typing import Dict, Any, Optional, List
 from PIL import Image
 import httpx
@@ -59,11 +61,18 @@ class MultiplexerVLMClient(BaseVLMClient):
         self.multiplexer: Optional[Multiplexer] = None
         self._initialized = False
         
+        # Debug instrumentation for hypothesis B (connection pool exhaustion)
+        self.client_requests_count = 0
+        self.concurrency_active_count = 0
+        
         self.logger.info(
             f"Initializing high-performance MultiplexerVLMClient for model {self.model_id} "
             f"with {len(self.tag_list)} tags, {len(self.multiplexer_endpoints)} endpoints, "
             f"global_max_concurrent: {self.max_concurrent_requests}"
         )
+        
+        # Log initialization for debugging
+        self.logger.debug(f"[DEBUG_HYPOTHESIS_B] MultiplexerVLMClient initialized: model_id={self.model_id}, max_concurrent={self.max_concurrent_requests}, endpoints={len(self.multiplexer_endpoints)}")
     
     async def _ensure_initialized(self):
         """Ensure the multiplexer is initialized. Called before each request.
@@ -163,15 +172,34 @@ class MultiplexerVLMClient(BaseVLMClient):
             self.logger.warning("analyze_frame called with no frame.")
             return {tag: 0.0 for tag in self.tag_list}
         
+        # Debug instrumentation for hypothesis B (HTTP request lifecycle)
+        frame_start_time = time.time()
+        request_id = f"{int(frame_start_time * 1000000)}"  # microsecond timestamp
+        
+        self.logger.debug(f"[DEBUG_HYPOTHESIS_B] Starting HTTP request {request_id}, active_requests: {self.client_requests_count + 1}")
+        
         # Use semaphore for GLOBAL admission control (system chokehold)
         async with self.semaphore:
+            semaphore_acquire_time = time.time()
+            
+            # Semaphore acquisition timing for hypothesis A (semaphore deadlock)
+            acquire_latency = semaphore_acquire_time - frame_start_time
+            self.logger.debug(f"[DEBUG_HYPOTHESIS_A] Semaphore acquired for request {request_id} after {acquire_latency:.3f}s")
+            
             # Ensure multiplexer is initialized
             await self._ensure_initialized()
             
             try:
+                self.client_requests_count += 1
+                self.concurrency_active_count += 1
                 image_data_url: str = self._convert_image_to_base64_data_url(frame)
+                
+                # Debug: Track concurrency level
+                self.logger.debug(f"[DEBUG_HYPOTHESIS_B] Request {request_id} active, concurrency level: {self.concurrency_active_count}, total requests: {self.client_requests_count}")
+                
             except Exception as e_convert:
                 self.logger.error(f"Failed to convert image to base64: {e_convert}", exc_info=True)
+                self.concurrency_active_count -= 1
                 return {tag: 0.0 for tag in self.tag_list}
             
             prompt_text: str = self._build_prompt_text()
@@ -191,6 +219,8 @@ class MultiplexerVLMClient(BaseVLMClient):
             
             try:
                 # Use multiplexer for the request with proper exception handling
+                http_request_start = time.time()
+                
                 completion = await self.multiplexer.chat.completions.create(
                     model=self.model_id,
                     messages=messages,
@@ -198,6 +228,12 @@ class MultiplexerVLMClient(BaseVLMClient):
                     temperature=0.8,
                     timeout=self.request_timeout
                 )
+                
+                http_request_end = time.time()
+                http_duration = http_request_end - http_request_start
+                
+                # HTTP request completion logging for hypothesis B
+                self.logger.debug(f"[DEBUG_HYPOTHESIS_B] HTTP request {request_id} completed in {http_duration:.3f}s, final concurrency: {self.concurrency_active_count - 1}")
                 
                 if completion.choices and completion.choices[0].message:
                     raw_reply = completion.choices[0].message.content or ""
@@ -217,37 +253,59 @@ class MultiplexerVLMClient(BaseVLMClient):
                         )
                     else:
                         self.logger.debug(f"Received response from multiplexer: {raw_reply[:100]}...")
+                    
+                    self.concurrency_active_count -= 1
+                    
+                    # Function completion logging
+                    frame_end_time = time.time()
+                    frame_duration = frame_end_time - frame_start_time
+                    self.logger.debug(f"[DEBUG_HYPOTHESIS_A] Frame analysis completed successfully for {request_id} in {frame_duration:.3f}s, concurrency: {self.concurrency_active_count}")
+                    
                     return self._parse_simple_default(raw_reply)
                 else:
                     self.logger.error(f"Unexpected response structure from multiplexer: {completion}")
+                    self.concurrency_active_count -= 1
                     return {tag: 0.0 for tag in self.tag_list}
                     
             except ModelNotFoundError as e:
                 self.logger.error(f"Model not found at endpoint {e.endpoint}: {e.message}")
+                self.concurrency_active_count -= 1
                 return {tag: 0.0 for tag in self.tag_list}
                 
             except AuthenticationError as e:
                 self.logger.error(f"Authentication failed at endpoint {e.endpoint}: {e.message}")
+                self.concurrency_active_count -= 1
                 return {tag: 0.0 for tag in self.tag_list}
                 
             except RateLimitError as e:
                 self.logger.warning(f"Rate limit hit at endpoint {e.endpoint}, retry after {e.retry_after}s: {e.message}")
+                self.concurrency_active_count -= 1
                 return {tag: 0.0 for tag in self.tag_list}
                 
             except ServiceUnavailableError as e:
                 self.logger.error(f"Service unavailable at endpoint {e.endpoint}: {e.message}")
+                self.concurrency_active_count -= 1
                 return {tag: 0.0 for tag in self.tag_list}
                 
             except ModelSelectionError as e:
                 self.logger.error(f"No models available for selection: {e.message}")
+                self.concurrency_active_count -= 1
                 return {tag: 0.0 for tag in self.tag_list}
                 
             except MultiplexerError as e:
                 self.logger.error(f"Multiplexer error: {e.message}")
+                self.concurrency_active_count -= 1
                 return {tag: 0.0 for tag in self.tag_list}
                 
             except Exception as e:
                 self.logger.error(f"Unexpected error during frame analysis: {e}", exc_info=True)
+                self.concurrency_active_count -= 1
+                
+                # Exception logging for hypothesis E (signal termination)
+                error_time = time.time()
+                error_type = type(e).__name__
+                self.logger.debug(f"[DEBUG_HYPOTHESIS_E] Frame analysis failed for {request_id}: {error_type}: {str(e)} at {error_time:.3f}s")
+                
                 return {tag: 0.0 for tag in self.tag_list}
     
     async def __aenter__(self):
@@ -257,4 +315,7 @@ class MultiplexerVLMClient(BaseVLMClient):
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
+        # Final logging for debugging
+        self.logger.debug(f"[DEBUG_HYPOTHESIS_SUMMARY] MultiplexerVLMClient exiting with total requests: {self.client_requests_count}, final concurrency: {self.concurrency_active_count}")
+        
         await self._cleanup_multiplexer()
