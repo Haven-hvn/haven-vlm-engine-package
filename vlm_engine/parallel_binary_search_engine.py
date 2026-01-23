@@ -60,11 +60,14 @@ class ParallelBinarySearchEngine:
         # Optimization: Limit backward search in refinement
         self.max_backward_search_frames = 2000
         
-        # Circuit breaker and failure tracking for NAL errors
+        # Enhanced circuit breaker and failure tracking for NAL errors
         self.corrupted_frame_ratio_threshold = 0.1  # Abort if >10% of frames are corrupted
         self.consecutive_extraction_failures = 0
-        self.max_consecutive_failures = 20
+        self.max_consecutive_failures = 10  # Reduced to prevent infinite loops
         self.failed_frames_history: Dict[str, List[int]] = {}  # video_path -> list of failed frames
+        self.total_processed_videos = 0
+        
+        self.logger.info(f"ParallelBinarySearchEngine initialized with enhanced circuit breakers (max failures: {self.max_consecutive_failures})")
         
         # Progress tracking
         self.progress_callback = progress_callback
@@ -93,12 +96,12 @@ class ParallelBinarySearchEngine:
     def _should_abort_due_to_consecutive_failures(self) -> bool:
         """Check if processing should be aborted due to too many consecutive failures"""
         if self.consecutive_extraction_failures >= self.max_consecutive_failures:
-            self.logger.error(f"Aborting processing: {self.consecutive_extraction_failures} consecutive extraction failures")
+            self.logger.error(f"Aborting processing: {self.consecutive_extraction_failures} consecutive extraction failures (max: {self.max_consecutive_failures})")
             return True
         
         return False
     
-    def _track_extraction_failure(self, video_path: str, frame_idx: int) -> None:
+    def _track_extraction_failure(self, video_path: str, frame_idx: int, failure_type: str = "general") -> None:
         """Track extraction failures for circuit breaker pattern"""
         if video_path not in self.failed_frames_history:
             self.failed_frames_history[video_path] = []
@@ -106,7 +109,15 @@ class ParallelBinarySearchEngine:
         self.failed_frames_history[video_path].append(frame_idx)
         self.consecutive_extraction_failures += 1
         
-        self.logger.warning(f"Frame extraction failed: {video_path}:{frame_idx} (consecutive: {self.consecutive_extraction_failures})")
+        # Enhanced failure tracking with failure type
+        failure_details = f"{failure_type}" if failure_type != "general" else ""
+        
+        if "timeout" in failure_type.lower():
+            self.logger.error(f"TIMEOUT frame extraction: {video_path}:{frame_idx} (consecutive: {self.consecutive_extraction_failures})")
+        elif "nal" in failure_type.lower():
+            self.logger.warning(f"NAL corruption frame extraction: {video_path}:{frame_idx} (consecutive: {self.consecutive_extraction_failures})")
+        else:
+            self.logger.warning(f"Frame extraction failed: {video_path}:{frame_idx} {failure_details} (consecutive: {self.consecutive_extraction_failures})")
     
     def _track_extraction_success(self) -> None:
         """Reset consecutive failure counter on successful extraction"""
@@ -940,7 +951,7 @@ class ParallelBinarySearchEngine:
 
     @contextmanager
     def temp_frame(self, video_path, frame_idx, phase: str = ''):
-        """Context manager for frame extraction with enhanced error handling and corruption tracking"""
+        """Enhanced frame extraction context manager with NAL error handling and loop prevention"""
         frame_tensor = None
         frame_pil = None
         extraction_failed = False
@@ -955,15 +966,28 @@ class ParallelBinarySearchEngine:
         except Exception as e:
             extraction_failed = True
             failure_reason = str(e)
-            self.logger.warning(f"Frame extraction failed for {video_path}:{frame_idx} in {phase}: {e}")
+            is_nal_error = self.frame_extractor._is_nal_unit_error(str(e)) if hasattr(self.frame_extractor, '_is_nal_unit_error') else False
+            
+            if is_nal_error:
+                self.logger.warning(f"NAL unit error for {video_path}:{frame_idx} in {phase}: {e}")
+            else:
+                self.logger.warning(f"Frame extraction failed for {video_path}:{frame_idx} in {phase}: {e}")
         
         if extraction_failed:
+            # Track extraction failure with type detection
+            if "timeout" in failure_reason.lower():
+                self._track_extraction_failure(video_path, frame_idx, "timeout")
+            elif "nal" in failure_reason.lower():
+                self._track_extraction_failure(video_path, frame_idx, "nal_corruption")
+            else:
+                self._track_extraction_failure(video_path, frame_idx, failure_reason.lower().split()[0] if failure_reason else "unknown")
+            
             # Check if this frame is chronically failing
             cache_key = (video_path, frame_idx)
             if cache_key in self.frame_extractor.frame_failure_counts:
                 failure_count = self.frame_extractor.frame_failure_counts[cache_key]
                 if failure_count >= self.frame_extractor.max_retry_attempts:
-                    self.logger.warning(f"Permanently skipping chronically failing frame {frame_idx} after {failure_count} attempts")
+                    self.logger.error(f"Permanently skipping chronically failing frame {frame_idx} after {failure_count} attempts")
                     yield None, None
                     return
             
@@ -973,6 +997,9 @@ class ParallelBinarySearchEngine:
             return
         
         try:
+            # Track successful extraction
+            self._track_extraction_success()
+            
             frame_pil = self._convert_tensor_to_pil(frame_tensor)
             if frame_pil is None:
                 self.logger.warning(f"Failed to convert tensor to PIL for frame {frame_idx}")
@@ -990,14 +1017,21 @@ class ParallelBinarySearchEngine:
             del frame_tensor, frame_pil
             gc.collect()
             
-            # Log memory usage
-            log_msg = f'RAM after frame processing for {frame_idx}'
-            if phase:
-                log_msg += f' in {phase}'
-            log_msg += f': {psutil.Process().memory_info().rss / 1024**2:.1f} MB'
+            # Check for circuit breaker conditions
+            if self._should_abort_due_to_consecutive_failures():
+                self.logger.error("Circuit breaker triggered in temp_frame context")
+            elif frame_idx % 100 == 0:  # Periodic corruption check
+                stats = self._get_processing_statistics(video_path)
+                if stats["corruption_ratio"] > self.corrupted_frame_ratio_threshold:
+                    self.logger.error(f"High corruption ratio detected: {stats['corruption_ratio']:.1%}")
             
-            # Only log occasionally to reduce noise
-            if frame_idx % 50 == 0:
+            # Memory logging (less frequent)
+            if frame_idx % 200 == 0:
+                memory_mb = psutil.Process().memory_info().rss / 1024**2
+                log_msg = f'RAM usage after frame {frame_idx}'
+                if phase:
+                    log_msg += f' in {phase}'
+                log_msg += f': {memory_mb:.1f} MB'
                 self.logger.info(log_msg)
 
     def _call_progress(self, progress: int):
