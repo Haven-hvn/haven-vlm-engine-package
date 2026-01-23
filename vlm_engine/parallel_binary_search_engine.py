@@ -60,85 +60,12 @@ class ParallelBinarySearchEngine:
         # Optimization: Limit backward search in refinement
         self.max_backward_search_frames = 2000
         
-        # Enhanced circuit breaker and failure tracking for NAL errors
-        self.corrupted_frame_ratio_threshold = 0.1  # Abort if >10% of frames are corrupted
-        self.consecutive_extraction_failures = 0
-        self.max_consecutive_failures = 10  # Reduced to prevent infinite loops
-        self.failed_frames_history: Dict[str, List[int]] = {}  # video_path -> list of failed frames
-        self.total_processed_videos = 0
-        
-        self.logger.info(f"ParallelBinarySearchEngine initialized with enhanced circuit breakers (max failures: {self.max_consecutive_failures})")
-        
         # Progress tracking
         self.progress_callback = progress_callback
         self._phase1_calls = 0
         self._estimated_remaining_calls = 0
         
         self.logger.info(f"ParallelBinarySearchEngine initialized for {len(self.action_tags)} actions")
-    
-    def _should_abort_due_to_corruption(self, video_path: str, total_attempted_frames: int) -> bool:
-        """Check if processing should be aborted due to high corruption rates"""
-        if video_path not in self.failed_frames_history:
-            return False
-        
-        failed_frames = self.failed_frames_history[video_path]
-        if total_attempted_frames == 0:
-            return False
-        
-        corruption_ratio = len(failed_frames) / total_attempted_frames
-        
-        if corruption_ratio > self.corrupted_frame_ratio_threshold:
-            self.logger.error(f"Aborting processing: {corruption_ratio:.1%} of frames corrupted ({len(failed_frames)}/{total_attempted_frames})")
-            return True
-        
-        return False
-    
-    def _should_abort_due_to_consecutive_failures(self) -> bool:
-        """Check if processing should be aborted due to too many consecutive failures"""
-        if self.consecutive_extraction_failures >= self.max_consecutive_failures:
-            self.logger.error(f"Aborting processing: {self.consecutive_extraction_failures} consecutive extraction failures (max: {self.max_consecutive_failures})")
-            return True
-        
-        return False
-    
-    def _track_extraction_failure(self, video_path: str, frame_idx: int, failure_type: str = "general") -> None:
-        """Track extraction failures for circuit breaker pattern"""
-        if video_path not in self.failed_frames_history:
-            self.failed_frames_history[video_path] = []
-        
-        self.failed_frames_history[video_path].append(frame_idx)
-        self.consecutive_extraction_failures += 1
-        
-        # Enhanced failure tracking with failure type
-        failure_details = f"{failure_type}" if failure_type != "general" else ""
-        
-        if "timeout" in failure_type.lower():
-            self.logger.error(f"TIMEOUT frame extraction: {video_path}:{frame_idx} (consecutive: {self.consecutive_extraction_failures})")
-        elif "nal" in failure_type.lower():
-            self.logger.warning(f"NAL corruption frame extraction: {video_path}:{frame_idx} (consecutive: {self.consecutive_extraction_failures})")
-        else:
-            self.logger.warning(f"Frame extraction failed: {video_path}:{frame_idx} {failure_details} (consecutive: {self.consecutive_extraction_failures})")
-    
-    def _track_extraction_success(self) -> None:
-        """Reset consecutive failure counter on successful extraction"""
-        self.consecutive_extraction_failures = 0
-    
-    def _get_processing_statistics(self, video_path: str) -> Dict[str, Any]:
-        """Get current processing statistics"""
-        if video_path not in self.failed_frames_history:
-            return {"total_attempted": 0, "failed": 0, "corruption_ratio": 0.0}
-        
-        failed_count = len(self.failed_frames_history[video_path])
-        # This is a conservative estimate since we don't track all attempted frames
-        attempted_estimate = failed_count + self.api_calls_made
-        corruption_ratio = failed_count / max(attempted_estimate, 1)
-        
-        return {
-            "total_attempted": attempted_estimate,
-            "failed": failed_count,
-            "corruption_ratio": corruption_ratio,
-            "consecutive_failures": self.consecutive_extraction_failures
-        }
     
     def initialize_search_ranges(self, total_frames: int) -> None:
         """Initialize search ranges for all actions"""
@@ -322,13 +249,8 @@ class ParallelBinarySearchEngine:
                             # Extract and analyze frame
                             with self.temp_frame(video_path, mid, phase='Phase 1.5') as (frame_tensor, frame_pil):
                                 if frame_pil is None:
-                                    self._track_extraction_failure(video_path, mid)
                                     low = mid + 1
                                     continue
-                                
-                                # Track successful extraction
-                                self._track_extraction_success()
-                                
                                 action_results = await vlm_analyze_function(frame_pil)
                                 self.api_calls_made += 1
                                 self._cache_vlm_result(vlm_cache_key, action_results)
@@ -391,7 +313,7 @@ class ParallelBinarySearchEngine:
         
         # Process frames concurrently
         async def process_scan_frame(frame_idx: int) -> Optional[Dict[str, Any]]:
-            """Process a single frame in the linear scan with error tracking"""
+            """Process a single frame in the linear scan"""
             async with vlm_semaphore:
                 try:
                     # Check VLM cache first
@@ -403,15 +325,10 @@ class ParallelBinarySearchEngine:
                         # Extract frame
                         with self.temp_frame(video_path, frame_idx, phase='Phase 1') as (frame_tensor, frame_pil):
                             if frame_pil is None:
-                                self._track_extraction_failure(video_path, frame_idx)
                                 return None
-                        
-                        # Track successful extraction
-                        self._track_extraction_success()
-                        
-                        action_results = await vlm_analyze_function(frame_pil)
-                        self.api_calls_made += 1
-                        self._cache_vlm_result(vlm_cache_key, action_results)
+                            action_results = await vlm_analyze_function(frame_pil)
+                            self.api_calls_made += 1
+                            self._cache_vlm_result(vlm_cache_key, action_results)
                     
                     # Store frame result for postprocessing compatibility
                     frame_identifier = float(frame_idx) / fps if use_timestamps else int(frame_idx)
@@ -426,39 +343,18 @@ class ParallelBinarySearchEngine:
                     }
                     
                 except Exception as e:
-                    error_msg = str(e)
                     self.logger.error(f"VLM analysis failed for frame {frame_idx}: {e}")
-                    self._track_extraction_failure(video_path, frame_idx)
                     return None
         
-        # Process all scan frames concurrently with progress updates and circuit breaker checks
+        # Process all scan frames concurrently with progress updates
         frame_tasks = [process_scan_frame(frame_idx) for frame_idx in scan_frames]
         results = []
         total_scan = len(frame_tasks)
         
         for fut in asyncio.as_completed(frame_tasks):
             result = await fut
-            
-            # Create a mapping of frame_idx to result
-            # Get the scan_frames corresponding to this result
             results.append(result)
             completed = len(results)
-            
-            # Estimate which frame we just processed (approximate)
-            frame_idx_est = scan_frames[min(completed - 1, len(scan_frames) - 1)]
-            
-            # Track failures and check for circuit breaker conditions
-            if result is None or isinstance(result, Exception):
-                self._track_extraction_failure(video_path, frame_idx_est)
-            
-            # Check for circuit breaker conditions periodically
-            if completed % 10 == 0:
-                stats = self._get_processing_statistics(video_path)
-                if (self._should_abort_due_to_corruption(video_path, stats["total_attempted"]) or 
-                    self._should_abort_due_to_consecutive_failures()):
-                    self.logger.error("Circuit breaker triggered! Stopping Phase 1 processing")
-                    break
-            
             progress = 10 + int(20 * (completed / total_scan))
             self._call_progress(progress)
         
@@ -563,12 +459,6 @@ class ParallelBinarySearchEngine:
         while self.has_unresolved_actions() and self._has_actions_within_depth_limit():
             iteration += 1
             
-            # Check for circuit breaker conditions before processing this iteration
-            if (self._should_abort_due_to_corruption(video_path, self.api_calls_made) or 
-                self._should_abort_due_to_consecutive_failures()):
-                self.logger.error("Circuit breaker triggered! Stopping Phase 2 processing")
-                break
-            
             # Guard against stalled searches
             for action_range in self.action_ranges:
                 if not action_range.is_resolved() and action_range.searching_end:
@@ -600,7 +490,7 @@ class ParallelBinarySearchEngine:
             
             # Process unprocessed midpoints
             async def process_midpoint_frame(frame_idx: int) -> Optional[Dict[str, Any]]:
-                """Process a single frame in the binary search with enhanced error tracking"""
+                """Process a single frame in the binary search"""
                 async with vlm_semaphore:
                     try:
                         # Check VLM cache first
@@ -612,11 +502,7 @@ class ParallelBinarySearchEngine:
                             # Extract frame
                             with self.temp_frame(video_path, frame_idx, phase='Phase 2') as (frame_tensor, frame_pil):
                                 if frame_pil is None:
-                                    self._track_extraction_failure(video_path, frame_idx)
                                     return None
-                            
-                            # Track successful extraction
-                            self._track_extraction_success()
                             
                             # Analyze frame with VLM
                             action_results = await vlm_analyze_function(frame_pil)
@@ -638,9 +524,7 @@ class ParallelBinarySearchEngine:
                         }
                         
                     except Exception as e:
-                        error_msg = str(e)
                         self.logger.error(f"VLM analysis failed for frame {frame_idx}: {e}")
-                        self._track_extraction_failure(video_path, frame_idx)
                         return None
             
             # Process all midpoint frames concurrently
@@ -818,13 +702,8 @@ class ParallelBinarySearchEngine:
                     else:
                         with self.temp_frame(video_path, mid, phase='Phase 1.5') as (frame_tensor, frame_pil):
                             if frame_pil is None:
-                                self._track_extraction_failure(video_path, mid)
                                 refine_range.start_frame = mid + 1
                                 continue
-                            
-                            # Track successful extraction
-                            self._track_extraction_success()
-                            
                             action_results = await vlm_analyze_function(frame_pil)
                             self.api_calls_made += 1
                             self._cache_vlm_result(vlm_cache_key, action_results)
@@ -907,16 +786,12 @@ class ParallelBinarySearchEngine:
                 async with vlm_semaphore:
                     with self.temp_frame(video_path, midpoint, phase='Phase 2') as (frame_tensor, frame_pil):
                         if frame_pil is None:
-                            self._track_extraction_failure(video_path, midpoint)
                             self.logger.warning(f"Failed to extract frame {midpoint} for {action_range.action_tag}, skipping")
                             continue
-                        
-                        # Track successful extraction
-                        self._track_extraction_success()
-                        
-                        action_results = await vlm_analyze_function(frame_pil)
-                        self.api_calls_made += 1
-                        self._update_binary_progress()
+            
+            action_results = await vlm_analyze_function(frame_pil)
+            self.api_calls_made += 1
+            self._update_binary_progress()
             
             # Update boundaries with the results
             self.boundary_detector.update_action_boundaries([action_range], midpoint, action_results, total_frames)
@@ -951,88 +826,19 @@ class ParallelBinarySearchEngine:
 
     @contextmanager
     def temp_frame(self, video_path, frame_idx, phase: str = ''):
-        """Enhanced frame extraction context manager with NAL error handling and loop prevention"""
-        frame_tensor = None
-        frame_pil = None
-        extraction_failed = False
-        failure_reason = ""
-        
-        try:
-            frame_tensor = self.frame_extractor.extract_frame(video_path, frame_idx)
-            if frame_tensor is None:
-                extraction_failed = True
-                failure_reason = "frame_extractor returned None"
-            
-        except Exception as e:
-            extraction_failed = True
-            failure_reason = str(e)
-            is_nal_error = self.frame_extractor._is_nal_unit_error(str(e)) if hasattr(self.frame_extractor, '_is_nal_unit_error') else False
-            
-            if is_nal_error:
-                self.logger.warning(f"NAL unit error for {video_path}:{frame_idx} in {phase}: {e}")
-            else:
-                self.logger.warning(f"Frame extraction failed for {video_path}:{frame_idx} in {phase}: {e}")
-        
-        if extraction_failed:
-            # Track extraction failure with type detection
-            if "timeout" in failure_reason.lower():
-                self._track_extraction_failure(video_path, frame_idx, "timeout")
-            elif "nal" in failure_reason.lower():
-                self._track_extraction_failure(video_path, frame_idx, "nal_corruption")
-            else:
-                self._track_extraction_failure(video_path, frame_idx, failure_reason.lower().split()[0] if failure_reason else "unknown")
-            
-            # Check if this frame is chronically failing
-            cache_key = (video_path, frame_idx)
-            if cache_key in self.frame_extractor.frame_failure_counts:
-                failure_count = self.frame_extractor.frame_failure_counts[cache_key]
-                if failure_count >= self.frame_extractor.max_retry_attempts:
-                    self.logger.error(f"Permanently skipping chronically failing frame {frame_idx} after {failure_count} attempts")
-                    yield None, None
-                    return
-            
-            # For first-time or occasional failures, yield None and continue
-            self.logger.debug(f"Frame extraction failed for {frame_idx}: {failure_reason}")
+        frame_tensor = self.frame_extractor.extract_frame(video_path, frame_idx)
+        if frame_tensor is None:
             yield None, None
             return
-        
-        try:
-            # Track successful extraction
-            self._track_extraction_success()
-            
-            frame_pil = self._convert_tensor_to_pil(frame_tensor)
-            if frame_pil is None:
-                self.logger.warning(f"Failed to convert tensor to PIL for frame {frame_idx}")
-                yield None, None
-                return
-                
-            yield frame_tensor, frame_pil
-            
-        except Exception as e:
-            self.logger.error(f"Error processing frame {frame_idx}: {e}")
-            yield None, None
-        
-        finally:
-            # Cleanup
-            del frame_tensor, frame_pil
-            gc.collect()
-            
-            # Check for circuit breaker conditions
-            if self._should_abort_due_to_consecutive_failures():
-                self.logger.error("Circuit breaker triggered in temp_frame context")
-            elif frame_idx % 100 == 0:  # Periodic corruption check
-                stats = self._get_processing_statistics(video_path)
-                if stats["corruption_ratio"] > self.corrupted_frame_ratio_threshold:
-                    self.logger.error(f"High corruption ratio detected: {stats['corruption_ratio']:.1%}")
-            
-            # Memory logging (less frequent)
-            if frame_idx % 200 == 0:
-                memory_mb = psutil.Process().memory_info().rss / 1024**2
-                log_msg = f'RAM usage after frame {frame_idx}'
-                if phase:
-                    log_msg += f' in {phase}'
-                log_msg += f': {memory_mb:.1f} MB'
-                self.logger.info(log_msg)
+        frame_pil = self._convert_tensor_to_pil(frame_tensor)
+        yield frame_tensor, frame_pil
+        del frame_tensor, frame_pil
+        gc.collect()
+        log_msg = f'RAM after release for frame {frame_idx}'
+        if phase:
+            log_msg += f' in {phase}'
+        log_msg += f': {psutil.Process().memory_info().rss / 1024**2:.1f} MB'
+        self.logger.info(log_msg)
 
     def _call_progress(self, progress: int):
         if self.progress_callback:

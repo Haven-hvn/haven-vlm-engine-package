@@ -60,7 +60,7 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
     # Strategy 1: Try PyAV first (works on all platforms)
     if av is not None:
         try:
-            container = av.open(video_path)
+            container = av.open(video_path, stream_options={'err_detect': 'ignore_err'})
             if not container.streams.video:
                 raise ValueError(f"No video stream found in: {video_path}")
             stream = container.streams.video[0]
@@ -107,7 +107,7 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
 def get_video_duration_decord(video_path: str) -> float:
     try:
         if is_macos_arm:
-            container = av.open(video_path)
+            container = av.open(video_path, stream_options={'err_detect': 'ignore_err'})
             if not container.streams.video:
                 return 0.0
             stream = container.streams.video[0]
@@ -138,46 +138,64 @@ def preprocess_video(video_path: str, frame_interval_sec: float = 0.5, img_size:
     logger = logging.getLogger("logger")
 
     if is_macos_arm:
+        container = None
         try:
-            container = av.open(video_path)
+            container = av.open(video_path, stream_options={'err_detect': 'ignore_err'})
             stream = container.streams.video[0]
             fps = float(stream.average_rate)
             if fps == 0:
                 logger.warning(f"Video {video_path} has FPS of 0. Cannot process.")
-                container.close()
+                if container:
+                    container.close()
                 return
             
             frames_to_skip = custom_round(fps * frame_interval_sec)
             if frames_to_skip < 1: frames_to_skip = 1
             
+            MAX_TOTAL_FRAMES = 10000  # Safety limit for corrupted videos
             frame_count = 0
-            for frame in container.decode(stream):
-                if frame_count % frames_to_skip == 0:
-                    frame_np = frame.to_ndarray(format='rgb24')
-                    frame_tensor = torch.from_numpy(frame_np).to(actual_device)
-                    
-                    if process_for_vlm:
-                        frame_tensor = crop_black_bars_lr(frame_tensor)
-                        
-                        if not torch.is_floating_point(frame_tensor):
-                            frame_tensor = frame_tensor.float()
-                        
-                        if use_half_precision:
-                            frame_tensor = frame_tensor.half()
-                        
-                        transformed_frame = frame_tensor
-                        frame_identifier = frame_count / fps if use_timestamps else frame_count
-                        yield (frame_identifier, transformed_frame)
-                    else:
-                        logger.warning("Standard processing path no longer supported - use VLM processing")
-                        continue
-                
-                frame_count += 1
             
-            container.close()
+            try:
+                decode_context = container.decode(stream)
+                for frame in decode_context:
+                    if frame_count >= MAX_TOTAL_FRAMES:
+                        logger.warning(f"Hit decode limit {MAX_TOTAL_FRAMES}, possible corruption in {video_path}")
+                        break
+                        
+                    if frame_count % frames_to_skip == 0:
+                        frame_np = frame.to_ndarray(format='rgb24')
+                        frame_tensor = torch.from_numpy(frame_np).to(actual_device)
+                        
+                        if process_for_vlm:
+                            frame_tensor = crop_black_bars_lr(frame_tensor)
+                            
+                            if not torch.is_floating_point(frame_tensor):
+                                frame_tensor = frame_tensor.float()
+                            
+                            if use_half_precision:
+                                frame_tensor = frame_tensor.half()
+                            
+                            transformed_frame = frame_tensor
+                            frame_identifier = frame_count / fps if use_timestamps else frame_count
+                            yield (frame_identifier, transformed_frame)
+                        else:
+                            logger.warning("Standard processing path no longer supported - use VLM processing")
+                            # Skip this frame but continue processing
+                    
+                    frame_count += 1
+                    
+            except (av.AVError, RuntimeError) as e:
+                logger.error(f"PyAV decoder error processing video {video_path} at frame {frame_count}: {e}")
+                logger.error(f"Possible H.264 NAL unit corruption detected, stopping decoding")
+            
+            finally:
+                if container:
+                    container.close()
             
         except Exception as e:
             logger.error(f"PyAV failed to process video {video_path}: {e}")
+            if container:
+                container.close()
             return
     else:
         try:
