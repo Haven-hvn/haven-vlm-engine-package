@@ -6,13 +6,15 @@ from .action_range import ActionRange
 from .adaptive_midpoint_collector import AdaptiveMidpointCollector
 import asyncio
 import logging
+import threading
+import queue
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
 import torch
 from PIL import Image
 import numpy as np
-from .preprocessing import crop_black_bars_lr, is_macos_arm
+from .preprocessing import crop_black_bars_lr, is_macos_arm, _pyav_semaphore
 
 if is_macos_arm:
     import av
@@ -23,7 +25,7 @@ else:
 class VideoFrameExtractor:
     """Efficiently extracts specific frames from video files with parallel processing and caching"""
     
-    def __init__(self, device_str: Optional[str] = None, use_half_precision: bool = True, max_workers: int = 4):
+    def __init__(self, device_str: Optional[str] = None, use_half_precision: bool = True, max_workers: int = 6):
         self.device = torch.device(device_str) if device_str else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.use_half_precision = use_half_precision
         self.max_workers = max_workers
@@ -141,30 +143,61 @@ class VideoFrameExtractor:
     def _extract_frame_decord(self, video_path: str, frame_idx: int) -> Optional[torch.Tensor]:
         """Extract frame using decord"""
         try:
-            vr = decord.VideoReader(video_path, ctx=decord.cpu(0))  # No readahead for 0.6.0
-            self.logger.debug(f'Created VideoReader for {video_path}')
-            if frame_idx >= len(vr):
-                self.logger.warning(f"Frame index {frame_idx} exceeds video length {len(vr)}")
-                del vr
+            # Add timeout protection for decord initialization
+            import threading
+            import queue
+            
+            result_queue = queue.Queue()
+            error_queue = queue.Queue()
+            
+            def extract_frame_thread():
+                try:
+                    vr = decord.VideoReader(video_path, ctx=decord.cpu(0))  # No readahead for 0.6.0
+                    self.logger.debug(f'Created VideoReader for {video_path}')
+                    
+                    # Safety check for frame index
+                    if frame_idx >= len(vr):
+                        self.logger.warning(f"Frame index {frame_idx} exceeds video length {len(vr)}")
+                        del vr
+                        result_queue.put(None)
+                        return
+                    
+                    frame_cpu = vr[frame_idx]
+                    if not isinstance(frame_cpu, torch.Tensor):
+                        frame_cpu = torch.from_numpy(frame_cpu.asnumpy())
+                    
+                    frame_cpu = crop_black_bars_lr(frame_cpu)
+                    frame = frame_cpu.to(self.device)
+                    
+                    if not torch.is_floating_point(frame):
+                        frame = frame.float() / 255.0
+                    if self.use_half_precision:
+                        frame = frame.half()
+                    
+                    del vr
+                    self.logger.debug(f'Released VideoReader after extracting frame {frame_idx}')
+                    result_queue.put(frame)
+                except Exception as e:
+                    error_queue.put(e)
+            
+            # Run decord extraction in a thread with timeout
+            thread = threading.Thread(target=extract_frame_thread, daemon=True)
+            thread.start()
+            thread.join(timeout=30.0)  # 30 second timeout
+            
+            if thread.is_alive():
+                self.logger.error(f"Decord frame extraction timed out after 30s for frame {frame_idx}")
                 return None
             
-            frame_cpu = vr[frame_idx]
-            if not isinstance(frame_cpu, torch.Tensor):
-                frame_cpu = torch.from_numpy(frame_cpu.asnumpy())
+            if not error_queue.empty():
+                error = error_queue.get()
+                self.logger.error(f"Decord frame extraction failed: {error}")
+                return None
             
-            frame_cpu = crop_black_bars_lr(frame_cpu)
-            frame = frame_cpu.to(self.device)
+            if not result_queue.empty():
+                return result_queue.get()
             
-            if not torch.is_floating_point(frame):
-                frame = frame.float() / 255.0
-            if self.use_half_precision:
-                frame = frame.half()
-            
-            del vr
-            self.logger.debug(f'Released VideoReader after extracting frame {frame_idx}')
-            # import gc # This line was not in the new_code, so it's removed.
-            # gc.collect() # This line was not in the new_code, so it's removed.
-            return frame
+            return None
         except Exception as e:
             self.logger.error(f"Decord frame extraction failed: {e}")
             return None
@@ -176,60 +209,62 @@ class VideoFrameExtractor:
                 self.logger.warning(f"Frame index {frame_idx} must be non-negative.")
                 return None
 
-            with av.open(video_path, stream_options={'err_detect': 'ignore_err'}) as container:
-                try:
-                    stream = container.streams.video[0]
-                    fps = float(stream.average_rate)
-                    total_frames = stream.frames or 0
-                    
-                    # Skip initial frames not yet present
-                    initial_padding = stream.start_time if hasattr(stream, "start_time") and stream.start_time else 0.0
-                    seek_frame = max(0, frame_idx - initial_padding * fps)
-                    if seek_frame < 0:
-                        self.logger.warning(f"Calculated seek_frame {seek_frame} is invalid after adjusting for initial padding")
-                        return None
-                    
-                    # Seek to approximate time
-                    timestamp = int(seek_frame / fps * av.time_base)
-                    container.seek(timestamp, stream=stream)
-                    
-                    current_frame = 0
-                    MAX_DECODE_ITERATIONS = 1000  # Additional safety limit for seeking
+            # Use semaphore to limit concurrent PyAV operations
+            with _pyav_semaphore:
+                with av.open(video_path, stream_options={'err_detect': 'ignore_err'}) as container:
                     try:
-                        decode_context = container.decode(stream)
-                        for frame in decode_context:
-                            if current_frame >= MAX_DECODE_ITERATIONS:
-                                self.logger.warning(f"Hit decode iteration limit {MAX_DECODE_ITERATIONS} while seeking frame {seek_frame}, possible corruption")
-                                break
-                            
-                            if current_frame == seek_frame:
-                                frame_np = frame.to_ndarray(format='rgb24')
-                                frame_tensor = torch.from_numpy(frame_np).to(self.device)
-                                frame_tensor = crop_black_bars_lr(frame_tensor)
+                        stream = container.streams.video[0]
+                        fps = float(stream.average_rate)
+                        total_frames = stream.frames or 0
+                        
+                        # Skip initial frames not yet present
+                        initial_padding = stream.start_time if hasattr(stream, "start_time") and stream.start_time else 0.0
+                        seek_frame = max(0, frame_idx - initial_padding * fps)
+                        if seek_frame < 0:
+                            self.logger.warning(f"Calculated seek_frame {seek_frame} is invalid after adjusting for initial padding")
+                            return None
+                        
+                        # Seek to approximate time
+                        timestamp = int(seek_frame / fps * av.time_base)
+                        container.seek(timestamp, stream=stream)
+                        
+                        current_frame = 0
+                        MAX_DECODE_ITERATIONS = 1000  # Additional safety limit for seeking
+                        try:
+                            decode_context = container.decode(stream)
+                            for frame in decode_context:
+                                if current_frame >= MAX_DECODE_ITERATIONS:
+                                    self.logger.warning(f"Hit decode iteration limit {MAX_DECODE_ITERATIONS} while seeking frame {seek_frame}, possible corruption")
+                                    break
                                 
-                                if not torch.is_floating_point(frame_tensor):
-                                    frame_tensor = frame_tensor.float()
+                                if current_frame == seek_frame:
+                                    frame_np = frame.to_ndarray(format='rgb24')
+                                    frame_tensor = torch.from_numpy(frame_np).to(self.device)
+                                    frame_tensor = crop_black_bars_lr(frame_tensor)
+                                    
+                                    if not torch.is_floating_point(frame_tensor):
+                                        frame_tensor = frame_tensor.float()
+                                    
+                                    if self.use_half_precision:
+                                        frame_tensor = frame_tensor.half()
+                                    
+                                    return frame_tensor
+                                current_frame += 1
                                 
-                                if self.use_half_precision:
-                                    frame_tensor = frame_tensor.half()
-                                
-                                return frame_tensor
-                            current_frame += 1
-                            
-                            if current_frame > seek_frame + 50:
-                                # Safety threshold to avoid excessive decoding
-                                self.logger.warning(f"Exceeded frame seek threshold seeking {seek_frame}")
-                                break
-                    except (av.AVError, RuntimeError) as e:
-                        self.logger.error(f"PyAV decoder error while seeking frame {seek_frame}: {e}")
-                        self.logger.error(f"Possible H.264 NAL unit corruption detected, stopping decoding at frame {current_frame}")
+                                if current_frame > seek_frame + 50:
+                                    # Safety threshold to avoid excessive decoding
+                                    self.logger.warning(f"Exceeded frame seek threshold seeking {seek_frame}")
+                                    break
+                        except (av.AVError, RuntimeError) as e:
+                            self.logger.error(f"PyAV decoder error while seeking frame {seek_frame}: {e}")
+                            self.logger.error(f"Possible H.264 NAL unit corruption detected, stopping decoding at frame {current_frame}")
+                            return None
+                    except Exception as e:
+                        self.logger.error(f"PyAV frame extraction error: {e}")
                         return None
-                except Exception as e:
-                    self.logger.error(f"PyAV frame extraction error: {e}")
-                    return None
 
-            self.logger.warning(f"Frame index {frame_idx} ({seek_frame} after seek) not found in video")
-            return None
+                    self.logger.warning(f"Frame index {frame_idx} ({seek_frame} after seek) not found in video")
+                    return None
         except Exception as e:
             self.logger.error(f"Failed to open video file for PyAV extraction: {e}")
             return None
