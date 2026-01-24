@@ -65,20 +65,9 @@ class VLMAIModel(Model):
                 self.logger.debug(f"ItemFuture data keys available: {list(itemFuture.data.keys()) if itemFuture.data else 'None'}")
                 self.logger.debug(f"Looking for input_names[0]='{item.input_names[0]}' in ItemFuture")
 
-                image_tensor: Any = itemFuture[item.input_names[0]]
+                input_name = item.input_names[0]
+                image_tensor: Any = itemFuture[input_name]
                 self.logger.debug(f"Retrieved image_tensor type: {type(image_tensor)}, value: {image_tensor if not isinstance(image_tensor, torch.Tensor) else '<Tensor>'}")
-
-                # Check if VLM analysis was already performed (e.g., by binary search processor)
-                if "humanactivityevaluation" in itemFuture and itemFuture["humanactivityevaluation"] is not None:
-                    self.logger.debug(f"VLM analysis already performed, skipping. Using existing humanactivityevaluation: {itemFuture['humanactivityevaluation']}")
-                    # Set the category data directly from existing results
-                    humanactivityevaluation = itemFuture["humanactivityevaluation"]
-                    if isinstance(self.model_category, list):
-                        for category in self.model_category:
-                            await itemFuture.set_data(category, humanactivityevaluation)
-                    else:
-                        await itemFuture.set_data(self.model_category, humanactivityevaluation)
-                    continue
 
                 threshold: float = itemFuture[item.input_names[1]] if item.input_names[1] in itemFuture else 0.5
                 return_confidence: bool = itemFuture[item.input_names[2]] if item.input_names[2] in itemFuture else self.model_return_confidence
@@ -167,6 +156,7 @@ class VideoPreprocessorModel(Model):
         self.image_size: Union[int, List[int], Tuple[int, int]] = model_config.model_image_size or 512
         self.frame_interval: float = 0.5 # Default value
         self.use_half_precision: bool = True # Default value
+        self.device: str = model_config.device or "cpu"
         self.normalization_config: Union[int, Dict[str, List[float]]] = model_config.normalization_config
         self.process_for_vlm: bool = False
     
@@ -189,7 +179,7 @@ class VideoPreprocessorModel(Model):
                 children: List[ItemFuture] = []
                 processed_frames_count: int = 0
                 
-                for frame_index, frame_tensor in preprocess_video(video_path, current_frame_interval, self.image_size, self.use_half_precision, use_timestamps, vr_video=vr_video, norm_config_idx=self.normalization_config, process_for_vlm=self.process_for_vlm):
+                for frame_index, frame_tensor in preprocess_video(video_path, current_frame_interval, self.image_size, self.use_half_precision, self.device, use_timestamps, vr_video=vr_video, norm_config_idx=self.normalization_config, process_for_vlm=self.process_for_vlm):
                     processed_frames_count += 1
                     
                     self.logger.debug(f"Creating child for frame {frame_index}, frame_tensor type: {type(frame_tensor)}")

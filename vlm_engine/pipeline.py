@@ -20,12 +20,12 @@ class Pipeline:
             modelName: str = model_config.name
             model_inputs: List[str] = model_config.inputs
             model_outputs: Union[str, List[str]] = model_config.outputs
-            
+
             if modelName == "dynamic_video_ai":
                 dynamic_models: List[ModelWrapper] = dynamic_ai_manager.get_dynamic_video_ai_models(model_inputs, model_outputs if isinstance(model_outputs, list) else [model_outputs] if model_outputs else [])
                 self.models.extend(dynamic_models)
                 continue
-            
+
             returned_model: Any = model_manager.get_or_create_model(modelName)
             self.models.append(ModelWrapper(returned_model, model_inputs, model_outputs, model_name_for_logging=modelName))
 
@@ -42,7 +42,7 @@ class Pipeline:
                         if cat in categories_set:
                             raise ValueError(f"Error: AI models must not have overlapping categories! Category: {cat}")
                         categories_set.add(cat)
-        
+
         is_vlm_pipeline: bool = any(isinstance(mw.model.model, VLMAIModel) for mw in self.models if hasattr(mw.model, 'model'))
         if is_vlm_pipeline:
             for model_wrapper in self.models:
@@ -55,7 +55,7 @@ class Pipeline:
                 itemFuture.close_future(itemFuture[key])
             else:
                 pass
-        
+
         for current_model_wrapper in self.models:
             if key in current_model_wrapper.inputs:
                 allOtherInputsPresent: bool = True
@@ -65,7 +65,7 @@ class Pipeline:
                         if not is_present:
                             allOtherInputsPresent = False
                             break
-                
+
                 if allOtherInputsPresent:
                     await current_model_wrapper.model.add_to_queue(QueueItem(itemFuture, current_model_wrapper.inputs, current_model_wrapper.outputs))
 
