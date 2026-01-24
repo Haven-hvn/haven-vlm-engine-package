@@ -11,17 +11,9 @@ from PIL import Image as PILImage
 is_macos_arm = sys.platform == 'darwin' and platform.machine() == 'arm64'
 
 try:
-    import decord  # type: ignore
-except ImportError:
-    decord = None
-try:
     import av  # type: ignore
 except ImportError:
     av = None
-
-# Import bridge set for decord
-if decord is not None:
-    decord.bridge.set_bridge('torch')
 
 # Global semaphore to limit concurrent PyAV operations since FFmpeg is not thread-safe
 # This prevents issues when multiple threads try to decode videos simultaneously
@@ -81,16 +73,16 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
             logger.debug(f"PyAV metadata extraction failed: {e}")
     
     # Strategy 2: Fallback to decord
-    if decord is None:
-        raise ImportError("Neither PyAV nor decord available for video processing")
-    
     try:
+        import decord  # type: ignore
         vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
         fps = float(vr.get_avg_fps())
         total_frames = len(vr)
         del vr
         logger.info(f"Using decord for video metadata: {fps} fps, {total_frames} frames")
         return fps, total_frames
+    except ImportError:
+        raise ImportError("Neither PyAV nor decord available for video processing")
     except Exception as decord_error:
         logger.error(f"Decord failed to read video {video_path}: {decord_error}")
         
@@ -133,7 +125,8 @@ def get_video_duration_decord(video_path: str) -> float:
             return duration
         elif is_macos_arm:
             # macOS ARM but av is not available, try decord
-            if decord is not None:
+            try:
+                import decord  # type: ignore
                 vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
                 num_frames = len(vr)
                 frame_rate = vr.get_avg_fps()
@@ -141,17 +134,22 @@ def get_video_duration_decord(video_path: str) -> float:
                 duration = num_frames / frame_rate
                 del vr
                 return duration
-            else:
+            except ImportError:
                 logging.getLogger("logger").error("Neither PyAV nor decord available on macOS ARM")
                 return 0.0
         else:
-            vr: decord.VideoReader = decord.VideoReader(video_path, ctx=decord.cpu(0))
-            num_frames: int = len(vr)
-            frame_rate: float = vr.get_avg_fps()
-            if frame_rate == 0: return 0.0
-            duration: float = num_frames / frame_rate
-            del vr
-            return duration
+            try:
+                import decord  # type: ignore
+                vr: decord.VideoReader = decord.VideoReader(video_path, ctx=decord.cpu(0))
+                num_frames: int = len(vr)
+                frame_rate: float = vr.get_avg_fps()
+                if frame_rate == 0: return 0.0
+                duration: float = num_frames / frame_rate
+                del vr
+                return duration
+            except ImportError:
+                logging.getLogger("logger").error("decord not available for video duration calculation")
+                return 0.0
     except Exception as e:
         logging.getLogger("logger").error(f"Error reading video {video_path}: {e}")
         return 0.0

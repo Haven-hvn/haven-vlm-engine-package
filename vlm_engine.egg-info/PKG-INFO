@@ -23,12 +23,15 @@ Requires-Dist: pyyaml
 Requires-Dist: opencv-python
 Requires-Dist: requests
 Requires-Dist: multiplexer-llm==0.2.3
+Provides-Extra: decord
+Requires-Dist: decord; extra == "decord"
 Dynamic: author
 Dynamic: author-email
 Dynamic: classifier
 Dynamic: description
 Dynamic: description-content-type
 Dynamic: home-page
+Dynamic: provides-extra
 Dynamic: requires-dist
 Dynamic: requires-python
 Dynamic: summary

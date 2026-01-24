@@ -61,7 +61,13 @@ class VLMAIModel(Model):
         for item in data:
             itemFuture: ItemFuture = item.item_future
             try:
+                self.logger.debug(f"VLMAIModel processing item, input_names: {item.input_names}, output_names: {item.output_names}")
+                self.logger.debug(f"ItemFuture data keys available: {list(itemFuture.data.keys()) if itemFuture.data else 'None'}")
+                self.logger.debug(f"Looking for input_names[0]='{item.input_names[0]}' in ItemFuture")
+                
                 image_tensor: Any = itemFuture[item.input_names[0]]
+                self.logger.debug(f"Retrieved image_tensor type: {type(image_tensor)}, value: {image_tensor if not isinstance(image_tensor, torch.Tensor) else '<Tensor>'}")
+                
                 threshold: float = itemFuture[item.input_names[1]] if item.input_names[1] in itemFuture else 0.5
                 return_confidence: bool = itemFuture[item.input_names[2]] if item.input_names[2] in itemFuture else self.model_return_confidence
 
@@ -160,7 +166,9 @@ class VideoPreprocessorModel(Model):
         for item in queue_items:
             itemFuture: ItemFuture = item.item_future
             try:
+                self.logger.debug(f"VideoPreprocessorModel processing item, input_names: {item.input_names}")
                 video_path: str = itemFuture[item.input_names[0]]
+                self.logger.debug(f"Video path: {video_path}, type: {type(video_path)}")
                 use_timestamps: bool = itemFuture[item.input_names[1]]
                 frame_interval_override: Optional[float] = itemFuture[item.input_names[2]]
                 current_frame_interval: float = frame_interval_override if frame_interval_override is not None else self.frame_interval
@@ -172,6 +180,8 @@ class VideoPreprocessorModel(Model):
                 for frame_index, frame_tensor in preprocess_video(video_path, current_frame_interval, self.image_size, self.use_half_precision, use_timestamps, vr_video=vr_video, norm_config_idx=self.normalization_config, process_for_vlm=self.process_for_vlm):
                     processed_frames_count += 1
                     
+                    self.logger.debug(f"Creating child for frame {frame_index}, frame_tensor type: {type(frame_tensor)}")
+                    
                     future_data_payload: Dict[str, Any] = {
                         "dynamic_frame": frame_tensor, 
                         "frame_index": frame_index,
@@ -179,7 +189,9 @@ class VideoPreprocessorModel(Model):
                         "dynamic_return_confidence": itemFuture[item.input_names[4]],
                         "dynamic_skipped_categories": itemFuture[item.input_names[6]]
                     }
-                    result_future: ItemFuture = await ItemFuture.create(item, future_data_payload, item.item_future.handler)
+                    result_future: ItemFuture = await ItemFuture.create(itemFuture, future_data_payload, itemFuture.handler)
+                    
+                    self.logger.debug(f"Created child ItemFuture with data keys: {list(future_data_payload.keys())}")
                     
                     # Set frame_index in the result future so result_coalescer can find it
                     await result_future.set_data("frame_index", frame_index)

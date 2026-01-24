@@ -321,20 +321,65 @@ For detailed information on model types, pipeline design, and best practices, se
 
 ### Common Issues
 
-1. **Connection Errors**
+1. **"No valid pipelines loaded" Error**
+   - **Cause**: Configuration is missing required pipeline definitions or models
+   - **Solution**: Ensure your `EngineConfig` includes:
+     - At least one pipeline in the `pipelines` dictionary
+     - Models defined in the `models` dictionary that are referenced by pipelines
+     - Valid `active_ai_models` list pointing to existing model names
+   - **Best Practice**: Use the provided [`haven_vlm_config.py`](haven_vlm_config.py:1) as a reference configuration
+
+2. **"Cannot import EngineConfig" Error**
+   - **Cause**: Incorrect import statement
+   - **Solution**: Import from the correct module:
+     ```python
+     from vlm_engine import VLMEngine  # Only VLMEngine is exposed
+     from vlm_engine.config_models import EngineConfig  # Config classes are in separate module
+     ```
+
+3. **Connection Errors**
    - Ensure your VLM server is running and accessible
    - Check the `api_base_url` configuration
    - Verify firewall settings
 
-2. **GPU Memory Errors**
+4. **GPU Memory Errors**
    - Reduce batch size or frame interval
    - Ensure proper CUDA installation
    - Check GPU memory availability
 
-3. **Slow Processing**
+5. **Slow Processing**
    - Increase frame interval for faster processing
    - Use GPU acceleration if available
    - Optimize VLM server settings
+
+### Package Import Best Practices
+
+**What's exposed to consumers:**
+- Only `VLMEngine` is exported via `from vlm_engine import *`
+- All configuration classes are in [`vlm_engine.config_models`](vlm_engine/config_models.py:1)
+- Internal classes (Pipeline, ModelManager, etc.) are not exported
+
+**Correct usage pattern:**
+```python
+# ✅ CORRECT - Import what you need
+from vlm_engine import VLMEngine
+from vlm_engine.config_models import EngineConfig, ModelConfig, PipelineConfig
+
+# ❌ WRONG - Don't try to import internal classes
+from vlm_engine import Pipeline  # This will fail
+from vlm_engine import ModelManager  # This will fail
+```
+
+### Platform-Specific Notes
+
+**macOS Users:**
+- The package uses PyAV for video processing (no decord required)
+- Video preprocessing loads entire videos into system RAM (not GPU memory)
+- Ensure sufficient RAM for your video sizes (e.g., 1GB video may require 4-8GB RAM)
+
+**Linux/Windows Users:**
+- Optionally install decord for faster video decoding: `pip install vlm-engine[decord]`
+- PyAV is the default and works on all platforms
 
 For detailed troubleshooting steps and validation checks, see [USER_GUIDE.md](docs/USER_GUIDE.md).
 

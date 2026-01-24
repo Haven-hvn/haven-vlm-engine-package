@@ -18,10 +18,12 @@ setup(
         "aiohttp",
         "pyyaml",
         "opencv-python",
-        "decord",
         "requests",
         "multiplexer-llm==0.2.3"
     ],
+    extras_require={
+        "decord": ["decord"],  # Optional: for faster video decoding on x86_64 Linux/Windows
+    },
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
