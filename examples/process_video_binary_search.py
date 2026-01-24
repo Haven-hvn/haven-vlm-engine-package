@@ -24,10 +24,10 @@ async def main():
                     "skipped_categories",
                 ],
                 output="results",
-                version=2.0,  # Version 2.0 with binary search
-                models=[
-                    PipelineModelConfig(
-                        name="dynamic_video_ai",
+            version=2.0,  # Version 2.0 with binary search optimization
+            models=[
+                PipelineModelConfig(
+                        name="video_analysis_pipeline",  # Updated from dynamic_video_ai
                         inputs=["video_path", "return_timestamps", "time_interval", "threshold", "return_confidence", "vr_video", "existing_video_data", "skipped_categories"],
                         outputs="results",
                     ),

@@ -23,10 +23,10 @@ async def main():
                     "skipped_categories",
                 ],
                 output="results",
-                version=1.0,
+                version=1.0,  # Version 1.0: Traditional linear processing with multiplexer
                 models=[
                     PipelineModelConfig(
-                        name="dynamic_video_ai",
+                        name="video_analysis_pipeline",  # Updated from dynamic_video_ai
                         inputs=["video_path", "return_timestamps", "time_interval", "threshold", "return_confidence", "vr_video", "existing_video_data", "skipped_categories"],
                         outputs="results",
                     ),
