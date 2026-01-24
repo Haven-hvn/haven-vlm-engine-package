@@ -142,9 +142,19 @@ class BinarySearchProcessor:
                 humanactivityevaluation.append((action_tag, confidence))
             
             self.logger.debug(f'Creating child for frame_index: {frame_index}, humanactivityevaluation: {humanactivityevaluation}')
-            result_future = await ItemFuture.create(item_future, {}, item_future.handler)
-            await result_future.set_data("frame_index", frame_index)
-            await result_future.set_data("humanactivityevaluation", humanactivityevaluation)
+
+            # Create child with all required fields for VLMAIModel
+            # Note: dynamic_frame is set to None because binary search already performed VLM analysis
+            # The VLM results are in humanactivityevaluation, so we don't need to re-run VLM
+            future_data_payload = {
+                "dynamic_frame": None,  # Placeholder - already analyzed via binary search
+                "frame_index": frame_index,
+                "dynamic_threshold": threshold,
+                "dynamic_return_confidence": return_confidence,
+                "dynamic_skipped_categories": item_future[item.input_names[6]] if item.input_names[6] in item_future else None,
+                "humanactivityevaluation": humanactivityevaluation
+            }
+            result_future = await ItemFuture.create(item_future, future_data_payload, item_future.handler)
             children.append(result_future)
         
         await item_future.set_data(item.output_names[0], children)

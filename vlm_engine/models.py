@@ -64,10 +64,22 @@ class VLMAIModel(Model):
                 self.logger.debug(f"VLMAIModel processing item, input_names: {item.input_names}, output_names: {item.output_names}")
                 self.logger.debug(f"ItemFuture data keys available: {list(itemFuture.data.keys()) if itemFuture.data else 'None'}")
                 self.logger.debug(f"Looking for input_names[0]='{item.input_names[0]}' in ItemFuture")
-                
+
                 image_tensor: Any = itemFuture[item.input_names[0]]
                 self.logger.debug(f"Retrieved image_tensor type: {type(image_tensor)}, value: {image_tensor if not isinstance(image_tensor, torch.Tensor) else '<Tensor>'}")
-                
+
+                # Check if VLM analysis was already performed (e.g., by binary search processor)
+                if "humanactivityevaluation" in itemFuture and itemFuture["humanactivityevaluation"] is not None:
+                    self.logger.debug(f"VLM analysis already performed, skipping. Using existing humanactivityevaluation: {itemFuture['humanactivityevaluation']}")
+                    # Set the category data directly from existing results
+                    humanactivityevaluation = itemFuture["humanactivityevaluation"]
+                    if isinstance(self.model_category, list):
+                        for category in self.model_category:
+                            await itemFuture.set_data(category, humanactivityevaluation)
+                    else:
+                        await itemFuture.set_data(self.model_category, humanactivityevaluation)
+                    continue
+
                 threshold: float = itemFuture[item.input_names[1]] if item.input_names[1] in itemFuture else 0.5
                 return_confidence: bool = itemFuture[item.input_names[2]] if item.input_names[2] in itemFuture else self.model_return_confidence
 
