@@ -50,6 +50,7 @@ class Pipeline:
                     model_wrapper.model.model.set_vlm_pipeline_mode(True)
     
     async def event_handler(self, itemFuture: ItemFuture, key: str) -> None:
+        logger.debug(f"[DEBUG_PIPELINE] event_handler called with key='{key}', ItemFuture.data keys: {list(itemFuture.data.keys()) if itemFuture.data else 'None'}")
         if key == self.output:
             if key in itemFuture:
                 itemFuture.close_future(itemFuture[key])
@@ -62,12 +63,16 @@ class Pipeline:
                 for inputName in current_model_wrapper.inputs:
                     if inputName != key:
                         is_present = (itemFuture.data is not None and inputName in itemFuture.data)
+                        logger.debug(f"[DEBUG_PIPELINE] Model '{current_model_wrapper.model_name_for_logging}' needs input '{inputName}': present={is_present}")
                         if not is_present:
                             allOtherInputsPresent = False
                             break
 
                 if allOtherInputsPresent:
+                    logger.info(f"[DEBUG_PIPELINE] All inputs present for '{current_model_wrapper.model_name_for_logging}', triggering model")
                     await current_model_wrapper.model.add_to_queue(QueueItem(itemFuture, current_model_wrapper.inputs, current_model_wrapper.outputs))
+                else:
+                    logger.debug(f"[DEBUG_PIPELINE] Not all inputs present for '{current_model_wrapper.model_name_for_logging}', skipping")
 
     async def start_model_processing(self) -> None:
         for model_wrapper in self.models:

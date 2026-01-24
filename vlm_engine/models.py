@@ -61,13 +61,13 @@ class VLMAIModel(Model):
         for item in data:
             itemFuture: ItemFuture = item.item_future
             try:
-                self.logger.debug(f"VLMAIModel processing item, input_names: {item.input_names}, output_names: {item.output_names}")
-                self.logger.debug(f"ItemFuture data keys available: {list(itemFuture.data.keys()) if itemFuture.data else 'None'}")
-                self.logger.debug(f"Looking for input_names[0]='{item.input_names[0]}' in ItemFuture")
+                self.logger.debug(f"[DEBUG_VLM] VLMAIModel processing item, input_names: {item.input_names}, output_names: {item.output_names}")
+                self.logger.debug(f"[DEBUG_VLM] ItemFuture data keys available: {list(itemFuture.data.keys()) if itemFuture.data else 'None'}")
+                self.logger.debug(f"[DEBUG_VLM] Looking for input_names[0]='{item.input_names[0]}' in ItemFuture")
 
                 input_name = item.input_names[0]
                 image_tensor: Any = itemFuture[input_name]
-                self.logger.debug(f"Retrieved image_tensor type: {type(image_tensor)}, value: {image_tensor if not isinstance(image_tensor, torch.Tensor) else '<Tensor>'}")
+                self.logger.debug(f"[DEBUG_VLM] Retrieved image_tensor type: {type(image_tensor)}, value: {image_tensor if not isinstance(image_tensor, torch.Tensor) else '<Tensor>'}")
 
                 threshold: float = itemFuture[item.input_names[1]] if item.input_names[1] in itemFuture else 0.5
                 return_confidence: bool = itemFuture[item.input_names[2]] if item.input_names[2] in itemFuture else self.model_return_confidence

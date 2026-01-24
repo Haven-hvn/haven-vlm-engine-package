@@ -70,12 +70,16 @@ class BinarySearchProcessor:
         threshold: float = item_future[item.input_names[3]] if item.input_names[3] in item_future else 0.5
         return_confidence: bool = item_future[item.input_names[4]] if item.input_names[4] in item_future else True
 
+        self.logger.info(f"[DEBUG] BinarySearchProcessor._process_video_item: Starting processing for {video_path}")
+        self.logger.info(f"[DEBUG] ItemFuture.data keys: {list(item_future.data.keys()) if item_future.data else 'None'}")
+
         callback = item_future["callback"] if "callback" in item_future else None
         if callback:
             callback(0)
 
         # Get VLM configuration from pipeline
         vlm_config = self._extract_vlm_config(item_future)
+        self.logger.info(f"[DEBUG] VLM config extracted: {vlm_config is not None}")
         if vlm_config is None:
             self.logger.error("No VLM configuration found - falling back to linear processing")
             await self._fallback_linear_processing(item)
@@ -83,6 +87,7 @@ class BinarySearchProcessor:
 
         # Extract action tags from VLM config
         action_tags = vlm_config.get("tag_list", [])
+        self.logger.info(f"[DEBUG] Action tags found: {len(action_tags)} tags")
         if not action_tags:
             self.logger.error("No action tags found in VLM config")
             await item_future.set_data(item.output_names[0], [])
@@ -103,6 +108,7 @@ class BinarySearchProcessor:
 
         # Get VLM coordinator from pipeline
         vlm_coordinator = self._get_vlm_coordinator(item_future)
+        self.logger.info(f"[DEBUG] VLM coordinator obtained: {vlm_coordinator is not None}")
         if vlm_coordinator is None:
             self.logger.error("No VLM coordinator available - falling back to linear processing")
             await self._fallback_linear_processing(item)
@@ -149,10 +155,12 @@ class BinarySearchProcessor:
             result_future = await ItemFuture.create(item_future, {}, item_future.handler)
             await result_future.set_data("frame_index", frame_index)
             await result_future.set_data("humanactivityevaluation", humanactivityevaluation)
+            self.logger.debug(f"[DEBUG] Child ItemFuture data keys after set_data: {list(result_future.data.keys())}")
             children.append(result_future)
         
         await item_future.set_data(item.output_names[0], children)
         self.logger.info(f"Binary search completed: {len(children)} frames processed with {engine.api_calls_made} API calls")
+        self.logger.info(f"[DEBUG] Child ItemFuture data keys sample: {list(children[0].data.keys()) if children else 'N/A'}")
 
     def _extract_vlm_config(self, item_future: ItemFuture) -> Optional[Dict[str, Any]]:
         """Extract VLM configuration from pipeline context"""
@@ -187,8 +195,9 @@ class BinarySearchProcessor:
 
     async def _fallback_linear_processing(self, item: QueueItem) -> None:
         """Fallback to original linear processing if binary search fails"""
-        
+
         item_future = item.item_future
+        self.logger.info(f"[DEBUG] FALLBACK: Using linear processing for video")
 
         video_path: str = item_future[item.input_names[0]]
         use_timestamps: bool = item_future[item.input_names[1]]
