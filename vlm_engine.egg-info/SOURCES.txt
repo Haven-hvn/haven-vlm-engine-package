@@ -5,6 +5,7 @@ vlm_engine/action_boundary_detector.py
 vlm_engine/action_range.py
 vlm_engine/adaptive_midpoint_collector.py
 vlm_engine/async_utils.py
+vlm_engine/base_vlm_client.py
 vlm_engine/binary_search_processor.py
 vlm_engine/config_models.py
 vlm_engine/dynamic_ai.py

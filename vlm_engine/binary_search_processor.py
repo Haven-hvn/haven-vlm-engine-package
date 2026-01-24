@@ -26,7 +26,6 @@ class BinarySearchProcessor:
 
     def __init__(self, model_config: ModelConfig):
         self.logger = logging.getLogger("logger")
-        self.device = model_config.device or "cpu"
         self.use_half_precision = True
         self.process_for_vlm = True  # Always enable VLM mode for binary search
         self.binary_search_enabled = True
@@ -98,7 +97,6 @@ class BinarySearchProcessor:
         engine = ParallelBinarySearchEngine(
             action_tags=action_tags,
             threshold=threshold,
-            device_str=self.device,
             use_half_precision=self.use_half_precision,
             progress_callback=callback
         )
@@ -207,7 +205,7 @@ class BinarySearchProcessor:
 
         for frame_index, frame_tensor in preprocess_video(
             video_path, current_frame_interval, 512, self.use_half_precision,
-            self.device, use_timestamps, vr_video=vr_video, norm_config_idx=1,
+            use_timestamps, vr_video=vr_video, norm_config_idx=1,
             process_for_vlm=self.process_for_vlm
         ):
             processed_frames_count += 1

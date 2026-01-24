@@ -28,10 +28,9 @@ class ParallelBinarySearchEngine:
     """
     
     def __init__(
-        self, 
+        self,
         action_tags: Optional[List[str]] = None,
         threshold: float = 0.5,
-        device_str: Optional[str] = None,
         use_half_precision: bool = True,
         progress_callback: Optional[Callable[[int], None]] = None
     ):
@@ -42,7 +41,7 @@ class ParallelBinarySearchEngine:
         # Core components
         self.midpoint_collector = AdaptiveMidpointCollector()
         self.boundary_detector = ActionBoundaryDetector(threshold)
-        self.frame_extractor = VideoFrameExtractor(device_str, use_half_precision)
+        self.frame_extractor = VideoFrameExtractor(use_half_precision=use_half_precision)
         
         # Search state
         self.action_ranges: List[ActionRange] = []

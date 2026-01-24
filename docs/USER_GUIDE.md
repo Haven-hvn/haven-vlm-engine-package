@@ -236,8 +236,7 @@ from vlm_engine.config_models import EngineConfig, PipelineConfig, ModelConfig, 
 # Define model configurations
 models = {
     "video_preprocessor": ModelConfig(
-        type="video_preprocessor",
-        model_file_name="video_preprocessor_config"
+        type="video_preprocessor"
     ),
     "llm_vlm_model": ModelConfig(
         type="vlm_model",
@@ -251,7 +250,7 @@ models = {
     ),
     "post_processor": ModelConfig(
         type="python",
-        model_file_name="result_postprocessor"
+        function_name="result_postprocessor"
     )
 }
 

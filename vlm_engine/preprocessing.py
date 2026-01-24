@@ -114,7 +114,7 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
 
 def get_video_duration_decord(video_path: str) -> float:
     try:
-        if is_macos_arm:
+        if is_macos_arm and av is not None:
             # Use semaphore to limit concurrent PyAV operations
             with _pyav_semaphore:
                 container = av.open(video_path, stream_options={'err_detect': 'ignore_err'})
@@ -131,6 +131,19 @@ def get_video_duration_decord(video_path: str) -> float:
                         duration = 0.0
                 container.close()
             return duration
+        elif is_macos_arm:
+            # macOS ARM but av is not available, try decord
+            if decord is not None:
+                vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
+                num_frames = len(vr)
+                frame_rate = vr.get_avg_fps()
+                if frame_rate == 0: return 0.0
+                duration = num_frames / frame_rate
+                del vr
+                return duration
+            else:
+                logging.getLogger("logger").error("Neither PyAV nor decord available on macOS ARM")
+                return 0.0
         else:
             vr: decord.VideoReader = decord.VideoReader(video_path, ctx=decord.cpu(0))
             num_frames: int = len(vr)
@@ -143,11 +156,11 @@ def get_video_duration_decord(video_path: str) -> float:
         logging.getLogger("logger").error(f"Error reading video {video_path}: {e}")
         return 0.0
 
-def preprocess_video(video_path: str, frame_interval_sec: float = 0.5, img_size: Union[int, Tuple[int,int]] = 512, use_half_precision: bool = True, device_str: Optional[str] = None, use_timestamps: bool = False, vr_video: bool = False, norm_config_idx: int = 1, process_for_vlm: bool = False) -> Iterator[Tuple[Union[int, float], torch.Tensor]]:
-    actual_device: torch.device = torch.device(device_str) if device_str else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def preprocess_video(video_path: str, frame_interval_sec: float = 0.5, img_size: Union[int, Tuple[int,int]] = 512, use_half_precision: bool = True, use_timestamps: bool = False, vr_video: bool = False, norm_config_idx: int = 1, process_for_vlm: bool = False) -> Iterator[Tuple[Union[int, float], torch.Tensor]]:
+    actual_device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger = logging.getLogger("logger")
 
-    if is_macos_arm:
+    if is_macos_arm and av is not None:
         container = None
         try:
             # Use semaphore to limit concurrent PyAV operations

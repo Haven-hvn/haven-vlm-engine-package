@@ -5,12 +5,15 @@ from PIL import Image
 import numpy as np
 from importlib import import_module
 import types
-from .async_utils import ModelProcessor, QueueItem, ItemFuture
 from .config_models import ModelConfig
 from .preprocessing import preprocess_video
 from .vlm_client import OpenAICompatibleVLMClient
 from .multiplexer_vlm_client import MultiplexerVLMClient
-from typing import Dict, Any, List, Optional, Union, Tuple, Callable
+from typing import Dict, Any, List, Optional, Union, Tuple, Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .async_utils import ModelProcessor, QueueItem, ItemFuture
+    from .models import VLMAIModel
 
 class Model:
     def __init__(self, configValues: ModelConfig):
@@ -19,19 +22,19 @@ class Model:
         self.instance_count: int = configValues.instance_count
         self.logger: logging.Logger = logging.getLogger("logger")
 
-    async def worker_function_wrapper(self, data: List[QueueItem]) -> None:
+    async def worker_function_wrapper(self, data: List['QueueItem']) -> None:
         try:
             await self.worker_function(data)
         except Exception as e:
             self.logger.error(f"Exception in worker_function: {e}", exc_info=True)
-            item: QueueItem
+            item: 'QueueItem'
             for item in data:
                 if hasattr(item, 'item_future') and item.item_future:
                     item.item_future.set_exception(e)
                 else:
                     self.logger.error("Item in batch lacks item_future, cannot propagate exception.")
 
-    async def worker_function(self, data: List[QueueItem]) -> None:
+    async def worker_function(self, data: List['QueueItem']) -> None:
         pass
 
     async def load(self) -> None:
@@ -53,7 +56,7 @@ class VLMAIModel(Model):
         self.use_multiplexer: bool = configValues.use_multiplexer
         self.tags: Dict[int, str] = {}
 
-    async def worker_function(self, data: List[QueueItem]):
+    async def worker_function(self, data: List['QueueItem']):
         self.logger.info(f"VLMAIModel worker_function called with {len(data)} items")
         for item in data:
             itemFuture: ItemFuture = item.item_future
@@ -124,26 +127,25 @@ class VLMAIModel(Model):
 class PythonModel(Model):
     def __init__(self, configValues: ModelConfig):
         super().__init__(configValues)
-        self.function_name: Optional[str] = configValues.model_file_name
+        self.function_name: Optional[str] = configValues.function_name
         if self.function_name is None:
             raise ValueError("function_name is required for models of type python")
         module_name: str = "vlm_engine.python_functions"
         try:
             module: types.ModuleType = import_module(module_name)
-            self.function: Callable[[List[QueueItem]], None] = getattr(module, self.function_name)
+            self.function: Callable[[List['QueueItem']], None] = getattr(module, self.function_name)
         except ImportError:
             raise ImportError(f"Module '{module_name}' not found.")
         except AttributeError:
             raise AttributeError(f"Function '{self.function_name}' not found in module '{module_name}'.")
 
-    async def worker_function(self, data: List[QueueItem]) -> None:
+    async def worker_function(self, data: List['QueueItem']) -> None:
         await self.function(data)
 
 class VideoPreprocessorModel(Model):
     def __init__(self, model_config: ModelConfig):
         super().__init__(model_config)
         self.logger = logging.getLogger("logger")
-        self.device: str = model_config.device or "cpu"
         self.image_size: Union[int, List[int], Tuple[int, int]] = model_config.model_image_size or 512
         self.frame_interval: float = 0.5 # Default value
         self.use_half_precision: bool = True # Default value
@@ -154,7 +156,7 @@ class VideoPreprocessorModel(Model):
         self.process_for_vlm = mode
         self.logger.info(f"VideoPreprocessorModel VLM mode set to: {self.process_for_vlm}")
 
-    async def worker_function(self, queue_items: List[QueueItem]) -> None:
+    async def worker_function(self, queue_items: List['QueueItem']) -> None:
         for item in queue_items:
             itemFuture: ItemFuture = item.item_future
             try:
@@ -167,7 +169,7 @@ class VideoPreprocessorModel(Model):
                 children: List[ItemFuture] = []
                 processed_frames_count: int = 0
                 
-                for frame_index, frame_tensor in preprocess_video(video_path, current_frame_interval, self.image_size, self.use_half_precision, self.device, use_timestamps, vr_video=vr_video, norm_config_idx=self.normalization_config, process_for_vlm=self.process_for_vlm):
+                for frame_index, frame_tensor in preprocess_video(video_path, current_frame_interval, self.image_size, self.use_half_precision, use_timestamps, vr_video=vr_video, norm_config_idx=self.normalization_config, process_for_vlm=self.process_for_vlm):
                     processed_frames_count += 1
                     
                     future_data_payload: Dict[str, Any] = {
@@ -191,11 +193,11 @@ class VideoPreprocessorModel(Model):
 class ModelManager:
     def __init__(self, models_config: Dict[str, ModelConfig]):
         self.models_config = models_config
-        self.models: Dict[str, ModelProcessor] = {}
+        self.models: Dict[str, 'ModelProcessor'] = {}
         self.logger: logging.Logger = logging.getLogger("logger")
-        self.ai_models: List[ModelProcessor] = []
+        self.ai_models: List['ModelProcessor'] = []
 
-    def get_or_create_model(self, modelName: str) -> ModelProcessor:
+    def get_or_create_model(self, modelName: str) -> 'ModelProcessor':
         if modelName not in self.models:
             created_model: Optional[ModelProcessor] = self.create_model(modelName)
             if created_model is None:
@@ -203,15 +205,18 @@ class ModelManager:
             self.models[modelName] = created_model
         return self.models[modelName]
     
-    def create_model(self, modelName: str) -> Optional[ModelProcessor]:
+    def create_model(self, modelName: str) -> Optional['ModelProcessor']:
         if modelName not in self.models_config:
             raise ValueError(f"Model '{modelName}' not found in configuration.")
         
         model_config = self.models_config[modelName]
-        model_processor_instance: ModelProcessor = self.model_factory(model_config)
+        model_processor_instance: 'ModelProcessor' = self.model_factory(model_config)
         return model_processor_instance
     
-    def model_factory(self, model_config: ModelConfig) -> ModelProcessor:
+    def model_factory(self, model_config: ModelConfig) -> 'ModelProcessor':
+        # Import here to avoid circular dependency
+        from .async_utils import ModelProcessor
+        
         model_type: str = model_config.type
         
         model_instance: Any

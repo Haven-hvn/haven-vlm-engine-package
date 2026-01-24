@@ -19,6 +19,8 @@ class ModelConfig(BaseModel):
     # Multiplexer configuration for multiple endpoints
     multiplexer_endpoints: Optional[List[Dict[str, Any]]] = None
     use_multiplexer: bool = False
+    # Python model function name
+    function_name: Optional[str] = None
 
 class PipelineModelConfig(BaseModel):
     name: str

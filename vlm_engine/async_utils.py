@@ -2,8 +2,10 @@ import asyncio
 import logging
 from typing import Dict, List, Any, Optional, Union, Callable, Awaitable, TYPE_CHECKING, Generator
 
+from .models import Model
+
 if TYPE_CHECKING:
-    from .models import Model
+    from .models import VLMAIModel
 
 logger: logging.Logger = logging.getLogger("logger")
 
@@ -76,6 +78,8 @@ class ModelProcessor():
         self.max_batch_size: int = self.model.max_batch_size
         self.workers_started: bool = False
         self.failed_loading: bool = False
+        # Import here to avoid circular dependency
+        from .models import VLMAIModel
         self.is_ai_model: bool = isinstance(self.model, VLMAIModel)
         
     async def add_to_queue(self, data: QueueItem) -> None:
