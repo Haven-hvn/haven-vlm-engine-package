@@ -3,7 +3,7 @@ import logging
 from typing import Dict, List, Any, Optional, Union, Callable, Awaitable, TYPE_CHECKING, Generator
 
 if TYPE_CHECKING:
-    from .models import Model, AIModel
+    from .models import Model
 
 logger: logging.Logger = logging.getLogger("logger")
 
@@ -76,14 +76,13 @@ class ModelProcessor():
         self.max_batch_size: int = self.model.max_batch_size
         self.workers_started: bool = False
         self.failed_loading: bool = False
-        from .models import AIModel
-        self.is_ai_model: bool = isinstance(self.model, AIModel)
+        self.is_ai_model: bool = isinstance(self.model, VLMAIModel)
         
     async def add_to_queue(self, data: QueueItem) -> None:
         await self.queue.put(data)
 
     async def worker_process(self) -> None:
-        model_identifier = getattr(self.model, 'model_identifier', 'UnknownModel')
+        model_id = getattr(self.model, 'model_id', 'UnknownModel')
         while True:
             try:
                 firstItem: QueueItem = await self.queue.get()
@@ -112,7 +111,7 @@ class ModelProcessor():
                             self.queue.task_done()
             except Exception as e:
                 self.failed_loading = True
-                logger.error(f"Failed to start workers for model '{model_identifier}': {e}", exc_info=True)
+                logger.error(f"Failed to start workers for model '{model_id}': {e}", exc_info=True)
                 raise
 
     async def start_workers(self) -> None:

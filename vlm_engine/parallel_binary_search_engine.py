@@ -336,7 +336,7 @@ class ParallelBinarySearchEngine:
                         "frame_index": frame_identifier,
                         "frame_idx": frame_idx,
                         "action_results": action_results,
-                        "actiondetection": [
+                        "humanactivityevaluation": [
                             (tag, confidence) for tag, confidence in action_results.items()
                             if confidence >= self.threshold
                         ]
@@ -517,7 +517,7 @@ class ParallelBinarySearchEngine:
                             "frame_index": frame_identifier,
                             "frame_idx": frame_idx,
                             "action_results": action_results,
-                            "actiondetection": [
+                            "humanactivityevaluation": [
                                 (tag, confidence) for tag, confidence in action_results.items()
                                 if confidence >= self.threshold
                             ]
@@ -802,7 +802,7 @@ class ParallelBinarySearchEngine:
                 "frame_index": frame_identifier,
                 "frame_idx": midpoint,
                 "action_results": action_results,
-                "actiondetection": [
+                "humanactivityevaluation": [
                     (tag, confidence) for tag, confidence in action_results.items()
                     if confidence >= self.threshold
                 ]

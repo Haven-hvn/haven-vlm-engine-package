@@ -12,9 +12,6 @@ from .vlm_client import OpenAICompatibleVLMClient
 from .multiplexer_vlm_client import MultiplexerVLMClient
 from typing import Dict, Any, List, Optional, Union, Tuple, Callable
 
-# Placeholder for ModelRunner
-ModelRunner = Any
-
 class Model:
     def __init__(self, configValues: ModelConfig):
         self.max_queue_size: Optional[int] = configValues.max_queue_size
@@ -40,49 +37,21 @@ class Model:
     async def load(self) -> None:
         return
 
-class AIModel(Model):
+class VLMAIModel(Model):
     def __init__(self, configValues: ModelConfig):
         super().__init__(configValues)
-        self.model_file_name: Optional[str] = configValues.model_file_name
-        self.model_license_name: Optional[str] = configValues.model_license_name
-        self.model_threshold: Optional[float] = configValues.model_threshold
         self.model_return_tags: bool = configValues.model_return_tags
         self.model_return_confidence: bool = configValues.model_return_confidence
-        self.device: Optional[str] = configValues.device
         self.fill_to_batch: bool = configValues.fill_to_batch_size
         self.model_image_size: Optional[Union[int, Tuple[int, int]]] = configValues.model_image_size
         self.model_category: Optional[Union[str, List[str]]] = configValues.model_category
-        self.model_version: Optional[str] = configValues.model_version
-        self.model_identifier: Optional[str] = configValues.model_identifier
         self.category_mappings: Optional[Dict[int, int]] = configValues.category_mappings
         self.normalization_config: Union[int, Dict[str, List[float]]] = configValues.normalization_config
         
-        if self.model_file_name is None:
-            raise ValueError("model_file_name is required for models of type model")
-        if self.model_category is not None and isinstance(self.model_category, list) and len(self.model_category) > 1:
-            if self.category_mappings is None:
-                raise ValueError("category_mappings is required for models with more than one category")
-        
-        self.model: Optional[ModelRunner] = None
-        self.tags: Dict[int, str] = {}
-
-        if self.device is None:
-            self.localdevice: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.localdevice: torch.device = torch.device(self.device)
-
-    async def worker_function(self, data: List[QueueItem]) -> None:
-        pass
-
-    async def load(self) -> None:
-        pass
-
-class VLMAIModel(AIModel):
-    def __init__(self, configValues: ModelConfig):
-        super().__init__(configValues)
         self.client_config: ModelConfig = configValues
         self.vlm_model: Optional[Union[OpenAICompatibleVLMClient, MultiplexerVLMClient]] = None
         self.use_multiplexer: bool = configValues.use_multiplexer
+        self.tags: Dict[int, str] = {}
 
     async def worker_function(self, data: List[QueueItem]):
         self.logger.info(f"VLMAIModel worker_function called with {len(data)} items")
@@ -90,7 +59,7 @@ class VLMAIModel(AIModel):
             itemFuture: ItemFuture = item.item_future
             try:
                 image_tensor: Any = itemFuture[item.input_names[0]]
-                threshold: float = itemFuture[item.input_names[1]] if item.input_names[1] in itemFuture else self.model_threshold
+                threshold: float = itemFuture[item.input_names[1]] if item.input_names[1] in itemFuture else 0.5
                 return_confidence: bool = itemFuture[item.input_names[2]] if item.input_names[2] in itemFuture else self.model_return_confidence
 
                 image_np: np.ndarray

@@ -23,7 +23,6 @@ async def main():
                     "skipped_categories",
                 ],
                 output="results",
-                short_name="dynamic_video",
                 version=1.0,
                 models=[
                     PipelineModelConfig(
@@ -35,14 +34,11 @@ async def main():
             )
         },
         models={
-            "video_preprocessor_dynamic": ModelConfig(type="video_preprocessor", model_file_name="video_preprocessor_dynamic"),
+            "video_preprocessor_dynamic": ModelConfig(type="video_preprocessor"),
             "llm_vlm_model": ModelConfig(
                 type="vlm_model",
-                model_file_name="llm_vlm_model",
-                model_category="actiondetection",
+                model_category="humanactivityevaluation",
                 model_id="HuggingFaceTB/SmolVLM-Instruct",
-                model_identifier=93848,
-                model_version="1.0",
                 api_base_url="http://localhost:7045",
                 tag_list = [
     "Anal Fucking", "Ass Licking", "Ass Penetration", "Ball Licking/Sucking", "Blowjob", "Cum on Person",
@@ -53,13 +49,13 @@ async def main():
     "Undressing", "Vaginal Penetration", "Vaginal Fucking", "Vibrating"
 ]
             ),
-            "result_coalescer": ModelConfig(type="python", model_file_name="result_coalescer"),
-            "result_finisher": ModelConfig(type="python", model_file_name="result_finisher"),
-            "batch_awaiter": ModelConfig(type="python", model_file_name="batch_awaiter"),
-            "video_result_postprocessor": ModelConfig(type="python", model_file_name="video_result_postprocessor"),
+            "result_coalescer": ModelConfig(type="python"),
+            "result_finisher": ModelConfig(type="python"),
+            "batch_awaiter": ModelConfig(type="python"),
+            "video_result_postprocessor": ModelConfig(type="python"),
         },
         category_config={
-    "actiondetection": {
+    "humanactivityevaluation": {
         "69": {
             "RenamedTag": "69",
             "MinMarkerDuration": "1s",

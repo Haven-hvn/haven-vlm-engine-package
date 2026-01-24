@@ -16,9 +16,7 @@ class TagTimeFrame(BaseModel):
 class ModelInfo(BaseModel):
     frame_interval: float
     threshold: float
-    version: float
     ai_model_id: int
-    file_name: Optional[str] = None
 
 class VideoMetadata(BaseModel):
     duration: float
@@ -40,16 +38,14 @@ class AIVideoResult(BaseModel):
         
         timespans: Dict[str, Dict[str, List[TagTimeFrame]]] = cls.__mutate_server_result_tags(frames, frame_interval)
         
-        ai_version_and_ids: List[Tuple[float, int, Optional[str], List[str]]] = server_result['ai_models_info']
+        ai_version_and_ids: List[Tuple[str, List[str]]] = server_result['ai_models_info']
         modelinfos: Dict[str, ModelInfo] = {}
         
-        for version, identifier, file_name, categories in ai_version_and_ids:
+        for model_id, categories in ai_version_and_ids:
             model_info_params = {
                 "frame_interval": frame_interval,
                 "threshold": float(server_result['threshold']),
-                "version": float(version) if version is not None else 1.0,
-                "ai_model_id": int(identifier) if identifier is not None else 0,
-                "file_name": file_name
+                "ai_model_id": int(model_id) if model_id is not None else 0,
             }
             model_info: ModelInfo = ModelInfo(**model_info_params)
             if isinstance(categories, list):

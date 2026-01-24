@@ -1,6 +1,6 @@
 import logging
 from .async_utils import ItemFuture, QueueItem
-from .models import ModelManager, AIModel, VLMAIModel, VideoPreprocessorModel
+from .models import ModelManager, VLMAIModel, VideoPreprocessorModel
 from .config_models import PipelineConfig, PipelineModelConfig
 from .dynamic_ai import DynamicAIManager
 from .model_wrapper import ModelWrapper
@@ -10,7 +10,6 @@ logger: logging.Logger = logging.getLogger("logger")
 
 class Pipeline:
     def __init__(self, config: PipelineConfig, model_manager: ModelManager, category_config: Dict, dynamic_ai_manager: DynamicAIManager):
-        self.short_name: str = config.short_name
         self.version: float = config.version
         self.inputs: List[str] = config.inputs
         self.output: str = config.output
@@ -32,7 +31,7 @@ class Pipeline:
 
         categories_set: Set[str] = set()
         for wrapper_model in self.models:
-            if hasattr(wrapper_model.model, 'model') and isinstance(wrapper_model.model.model, AIModel):
+            if hasattr(wrapper_model.model, 'model') and isinstance(wrapper_model.model.model, VLMAIModel):
                 current_categories: Union[str, List[str], None] = wrapper_model.model.model.model_category
                 if isinstance(current_categories, str):
                     if current_categories in categories_set:
@@ -78,13 +77,11 @@ class Pipeline:
     def get_ai_models_info(self) -> List[Tuple[Union[str, float, None], Optional[str], Optional[str], Optional[Union[str, List[str]]]]]:
         ai_version_and_ids: List[Tuple[Union[str, float, None], Optional[str], Optional[str], Optional[Union[str, List[str]]]]] = []
         for model_wrapper in self.models:
-            if hasattr(model_wrapper.model, 'model') and isinstance(model_wrapper.model.model, AIModel):
-                inner_ai_model: AIModel = model_wrapper.model.model
-                version = inner_ai_model.model_version
-                identifier = inner_ai_model.model_identifier
-                file_name = inner_ai_model.model_file_name
+            if hasattr(model_wrapper.model, 'model') and isinstance(model_wrapper.model.model, VLMAIModel):
+                inner_ai_model: VLMAIModel = model_wrapper.model.model
+                model_id = inner_ai_model.client_config.model_id
                 category = inner_ai_model.model_category
-                ai_version_and_ids.append((version, identifier, file_name, category))
+                ai_version_and_ids.append((model_id, category))
         return ai_version_and_ids
 
 class PipelineManager:
@@ -103,7 +100,7 @@ class PipelineManager:
                 new_pipeline = Pipeline(pipeline_config, self.model_manager, self.category_config, self.dynamic_ai_manager)
                 self.pipelines[pipeline_name] = new_pipeline
                 await new_pipeline.start_model_processing()
-                self.logger.info(f"Pipeline {pipeline_name} V{new_pipeline.version} loaded successfully!")
+                self.logger.info(f"Pipeline {pipeline_name} loaded successfully!")
             except Exception as e:
                 if pipeline_name in self.pipelines:
                     del self.pipelines[pipeline_name]

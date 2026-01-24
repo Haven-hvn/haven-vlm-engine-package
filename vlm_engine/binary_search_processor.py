@@ -138,15 +138,15 @@ class BinarySearchProcessor:
         children = []
         for fr in frame_results:
             frame_index = fr["frame_index"]
-            # Convert action_results to actiondetection format
-            actiondetection = []
+            # Convert action_results to humanactivityevaluation format
+            humanactivityevaluation = []
             for action_tag, confidence in fr["action_results"].items():
-                actiondetection.append((action_tag, confidence))
+                humanactivityevaluation.append((action_tag, confidence))
             
-            self.logger.debug(f'Creating child for frame_index: {frame_index}, actiondetection: {actiondetection}')
+            self.logger.debug(f'Creating child for frame_index: {frame_index}, humanactivityevaluation: {humanactivityevaluation}')
             result_future = await ItemFuture.create(item_future, {}, item_future.handler)
             await result_future.set_data("frame_index", frame_index)
-            await result_future.set_data("actiondetection", actiondetection)
+            await result_future.set_data("humanactivityevaluation", humanactivityevaluation)
             children.append(result_future)
         
         await item_future.set_data(item.output_names[0], children)
