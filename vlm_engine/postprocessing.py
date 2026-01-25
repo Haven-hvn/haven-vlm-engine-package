@@ -16,7 +16,7 @@ class TagTimeFrame(BaseModel):
 class ModelInfo(BaseModel):
     frame_interval: float
     threshold: float
-    ai_model_id: int
+    ai_model_id: str
 
 class VideoMetadata(BaseModel):
     duration: float
@@ -41,12 +41,16 @@ class AIVideoResult(BaseModel):
         ai_version_and_ids: List[Tuple[str, List[str]]] = server_result['ai_models_info']
         modelinfos: Dict[str, ModelInfo] = {}
         
+        logger.debug(f"[DEBUG_POSTPROCESS] Received ai_models_info: {ai_version_and_ids}")
+        
         for model_id, categories in ai_version_and_ids:
+            logger.debug(f"[DEBUG_POSTPROCESS] Processing model_id: {model_id} (type: {type(model_id)})")
             model_info_params = {
                 "frame_interval": frame_interval,
                 "threshold": float(server_result['threshold']),
-                "ai_model_id": int(model_id) if model_id is not None else 0,
+                "ai_model_id": model_id if model_id is not None else "0",
             }
+            logger.debug(f"[DEBUG_POSTPROCESS] model_info_params: {model_info_params}")
             model_info: ModelInfo = ModelInfo(**model_info_params)
             if isinstance(categories, list):
                 for category in categories:
