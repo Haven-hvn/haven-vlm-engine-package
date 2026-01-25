@@ -24,8 +24,8 @@ def debug_python_model_init(self, configValues):
     
     # Try to get dict representation
     try:
-        config_dict = configValues.dict()
-        logger.debug(f"[DEBUG_PYTHON_MODEL] configValues.dict(): {config_dict}")
+        config_dict = configValues.model_dump()
+        logger.debug(f"[DEBUG_PYTHON_MODEL] configValues.model_dump(): {config_dict}")
         logger.debug(f"[DEBUG_PYTHON_MODEL] Full config for debugging: {config_dict}")
     except Exception as e:
         logger.debug(f"[DEBUG_PYTHON_MODEL] Could not get dict: {e}")

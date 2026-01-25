@@ -166,15 +166,43 @@ class BinarySearchProcessor:
         """Extract VLM configuration from pipeline context"""
         try:
             # Try to get pipeline configuration
-            pipeline = item_future["pipeline"] if "pipeline" in item_future else None
+            pipeline = None
+            if hasattr(item_future, '__contains__') and "pipeline" in item_future:
+                pipeline = item_future["pipeline"]
+            elif hasattr(item_future, 'data') and item_future.data and "pipeline" in item_future.data:
+                pipeline = item_future.data.get("pipeline")
+            
+            self.logger.debug(f"[DEBUG_VLM_CONFIG] Looking for pipeline in item_future: {'pipeline' in item_future if hasattr(item_future, '__contains__') else 'N/A'}")
             if pipeline:
+                self.logger.debug(f"[DEBUG_VLM_CONFIG] Pipeline has {len(pipeline.models)} models")
                 # Look for VLM model configuration
-                for model_wrapper in pipeline.models:
-                    if hasattr(model_wrapper.model, 'model') and hasattr(model_wrapper.model.model, 'client_config'):
-                        return model_wrapper.model.model.client_config.dict()
+                for idx, model_wrapper in enumerate(pipeline.models):
+                    self.logger.debug(f"[DEBUG_VLM_CONFIG] Model {idx}: name={model_wrapper.model_name_for_logging}, has model attr={hasattr(model_wrapper, 'model')}")
+                    if hasattr(model_wrapper, 'model'):
+                        self.logger.debug(f"[DEBUG_VLM_CONFIG] Model.model type: {type(model_wrapper.model).__name__}")
+                        # Try multiple paths to get to the VLM config
+                        vlm_config = None
+                        
+                        # Path 1: Check if model has client_config directly
+                        if hasattr(model_wrapper.model, 'client_config'):
+                            vlm_config = model_wrapper.model.client_config.model_dump()
+                        
+                        # Path 2: Check if model.model has client_config (nested model structure)
+                        if not vlm_config and hasattr(model_wrapper.model, 'model') and hasattr(model_wrapper.model.model, 'client_config'):
+                            vlm_config = model_wrapper.model.model.client_config.model_dump()
+                        
+                        if vlm_config:
+                            self.logger.debug(f"[DEBUG_VLM_CONFIG] Found VLM config with keys: {list(vlm_config.keys())}")
+                            self.logger.debug(f"[DEBUG_VLM_CONFIG] tag_list: {vlm_config.get('tag_list', 'NOT FOUND')}")
+                            # Ensure tag_list is a list
+                            if 'tag_list' in vlm_config and vlm_config['tag_list']:
+                                return vlm_config
+                            else:
+                                self.logger.warning(f"[DEBUG_VLM_CONFIG] VLM config found but tag_list is missing or empty: {vlm_config.get('tag_list')}")
+            self.logger.warning("[DEBUG_VLM_CONFIG] No VLM configuration found in pipeline")
             return None
         except Exception as e:
-            self.logger.error(f"Failed to extract VLM config: {e}")
+            self.logger.error(f"Failed to extract VLM config: {e}", exc_info=True)
             return None
 
     def _get_vlm_coordinator(self, item_future: ItemFuture):

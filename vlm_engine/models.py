@@ -118,16 +118,16 @@ class VLMAIModel(Model):
 
     async def load(self) -> None:
         if self.vlm_model is None:
-            self.logger.info(f"Loading VLMAIModel with config: {self.client_config.dict().keys()}")
+            self.logger.info(f"Loading VLMAIModel with config: {list(self.client_config.model_dump().keys())}")
 
             if self.use_multiplexer:
                 self.logger.info("Using MultiplexerVLMClient for load balancing across multiple endpoints")
-                self.vlm_model = MultiplexerVLMClient(config=self.client_config.dict())
+                self.vlm_model = MultiplexerVLMClient(config=self.client_config.model_dump())
                 # Initialize the multiplexer
                 await self.vlm_model._ensure_initialized()
             else:
                 self.logger.info("Using single endpoint OpenAICompatibleVLMClient")
-                self.vlm_model = OpenAICompatibleVLMClient(config=self.client_config.dict())
+                self.vlm_model = OpenAICompatibleVLMClient(config=self.client_config.model_dump())
 
             self.logger.info("VLMAIModel loaded successfully")
 
@@ -138,10 +138,10 @@ class PythonModel(Model):
         self.function_name: Optional[str] = configValues.function_name
         self.logger.debug(f"[DEBUG_PYTHON_MODEL] function_name from configValues: {repr(self.function_name)}")
         if self.function_name is None:
-            self.logger.error(f"[DEBUG_PYTHON_MODEL] ERROR: function_name is None! Full config: {configValues.dict()}")
+            self.logger.error(f"[DEBUG_PYTHON_MODEL] ERROR: function_name is None! Full config: {configValues.model_dump()}")
             raise ValueError("function_name is required for models of type python")
         if self.function_name == "":
-            self.logger.error(f"[DEBUG_PYTHON_MODEL] ERROR: function_name is empty string! Full config: {configValues.dict()}")
+            self.logger.error(f"[DEBUG_PYTHON_MODEL] ERROR: function_name is empty string! Full config: {configValues.model_dump()}")
         module_name: str = "vlm_engine.python_functions"
         try:
             self.logger.debug(f"[DEBUG_PYTHON_MODEL] Importing module '{module_name}' for function '{self.function_name}'")
@@ -247,7 +247,7 @@ class ModelManager:
         
         model_type: str = model_config.type
         self.logger.debug(f"[DEBUG_MODEL_FACTORY] Creating model of type: {model_type}")
-        self.logger.debug(f"[DEBUG_MODEL_FACTORY] Full model config: {model_config.dict()}")
+        self.logger.debug(f"[DEBUG_MODEL_FACTORY] Full model config: {model_config.model_dump()}")
         
         if model_type == 'python':
             self.logger.debug(f"[DEBUG_MODEL_FACTORY] Python model detected! function_name: {repr(model_config.function_name)}")
