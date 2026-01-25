@@ -60,11 +60,11 @@ class VLMEngine:
             data = [
                 video_path,
                 kwargs.get("return_timestamps", True),
-                kwargs.get("time_interval", 0.5),
+                kwargs.get("frame_interval", 0.5),
                 kwargs.get("threshold", 0.5),
                 kwargs.get("return_confidence", True),
                 kwargs.get("vr_video", False),
-                kwargs.get("existing_video_data", None),
+                kwargs.get("existing_json_data", None),
                 kwargs.get("skipped_categories", None),
             ]
             

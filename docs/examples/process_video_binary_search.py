@@ -24,10 +24,11 @@ async def main():
                     "skipped_categories",
                 ],
                 output="results",
-            version=2.0,
-            models=[
-                PipelineModelConfig(
-                        name="video_analysis_pipeline",
+                short_name="dynamic_video",
+                version=2.0,  # Version 2.0 with binary search
+                models=[
+                    PipelineModelConfig(
+                        name="dynamic_video_ai",
                         inputs=["video_path", "return_timestamps", "time_interval", "threshold", "return_confidence", "vr_video", "existing_video_data", "skipped_categories"],
                         outputs="results",
                     ),
@@ -37,15 +38,19 @@ async def main():
         models={
             # NEW: Binary Search Processor replaces video_preprocessor_dynamic
             "binary_search_processor_dynamic": ModelConfig(
-                type="binary_search_processor",
+                type="binary_search_processor", 
+                model_file_name="binary_search_processor_dynamic",
                 instance_count=10,           # Multiple instances for parallel video processing
                 max_batch_size=1,            # Process one video at a time for better concurrency
                 max_concurrent_requests=20,  # Allow concurrent video processing
             ),
             "llm_vlm_model": ModelConfig(
                 type="vlm_model",
-                model_category="humanactivityevaluation",
+                model_file_name="llm_vlm_model",
+                model_category="actiondetection",
                 model_id="Haven-adult",
+                model_identifier=93848,
+                model_version="1.0",
                 use_multiplexer=True,
                 # Increase concurrency limits for parallel video processing
                 max_concurrent_requests=50,  # Increased from default 20
@@ -71,13 +76,13 @@ async def main():
                     "Undressing", "Vaginal Penetration", "Vaginal Fucking", "Vibrating"
                 ]
             ),
-            "result_coalescer": ModelConfig(type="python", function_name="result_coalescer"),
-            "result_finisher": ModelConfig(type="python", function_name="result_finisher"),
-            "batch_awaiter": ModelConfig(type="python", function_name="batch_awaiter"),
-            "video_result_postprocessor": ModelConfig(type="python", function_name="video_result_postprocessor"),
+            "result_coalescer": ModelConfig(type="python", model_file_name="result_coalescer"),
+            "result_finisher": ModelConfig(type="python", model_file_name="result_finisher"),
+            "batch_awaiter": ModelConfig(type="python", model_file_name="batch_awaiter"),
+            "video_result_postprocessor": ModelConfig(type="python", model_file_name="video_result_postprocessor"),
         },
         category_config={
-            "humanactivityevaluation": {
+            "actiondetection": {
                 "Anal Fucking": {
                     "RenamedTag": "Anal Fucking",
                     "MinMarkerDuration": "1s",

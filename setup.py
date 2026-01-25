@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="vlm_engine",
-    version="0.8.49",
+    version="0.9.0",
     description="Advanced Vision-Language Model Engine for content tagging",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -18,10 +18,9 @@ setup(
         "aiohttp",
         "pyyaml",
         "opencv-python",
+        "decord",
         "requests",
-        "multiplexer-llm==0.2.3",
-        "decord",  # Required for binary search video decoding
-        "av>=8.0.0"  # Required as fallback for video decoding on all platforms
+        "multiplexer-llm==0.2.3"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

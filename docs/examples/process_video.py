@@ -23,10 +23,11 @@ async def main():
                     "skipped_categories",
                 ],
                 output="results",
-                version=1.0,  # Version 1.0: Traditional linear processing
+                short_name="dynamic_video",
+                version=1.0,
                 models=[
                     PipelineModelConfig(
-                        name="video_analysis_pipeline",  # Updated from dynamic_video_ai
+                        name="dynamic_video_ai",
                         inputs=["video_path", "return_timestamps", "time_interval", "threshold", "return_confidence", "vr_video", "existing_video_data", "skipped_categories"],
                         outputs="results",
                     ),
@@ -34,11 +35,14 @@ async def main():
             )
         },
         models={
-            "video_preprocessor_dynamic": ModelConfig(type="video_preprocessor"),
+            "video_preprocessor_dynamic": ModelConfig(type="video_preprocessor", model_file_name="video_preprocessor_dynamic"),
             "llm_vlm_model": ModelConfig(
                 type="vlm_model",
-                model_category="humanactivityevaluation",
+                model_file_name="llm_vlm_model",
+                model_category="actiondetection",
                 model_id="HuggingFaceTB/SmolVLM-Instruct",
+                model_identifier=93848,
+                model_version="1.0",
                 api_base_url="http://localhost:7045",
                 tag_list = [
     "Anal Fucking", "Ass Licking", "Ass Penetration", "Ball Licking/Sucking", "Blowjob", "Cum on Person",
@@ -49,13 +53,13 @@ async def main():
     "Undressing", "Vaginal Penetration", "Vaginal Fucking", "Vibrating"
 ]
             ),
-            "result_coalescer": ModelConfig(type="python", function_name="result_coalescer"),
-            "result_finisher": ModelConfig(type="python", function_name="result_finisher"),
-            "batch_awaiter": ModelConfig(type="python", function_name="batch_awaiter"),
-            "video_result_postprocessor": ModelConfig(type="python", function_name="video_result_postprocessor"),
+            "result_coalescer": ModelConfig(type="python", model_file_name="result_coalescer"),
+            "result_finisher": ModelConfig(type="python", model_file_name="result_finisher"),
+            "batch_awaiter": ModelConfig(type="python", model_file_name="batch_awaiter"),
+            "video_result_postprocessor": ModelConfig(type="python", model_file_name="video_result_postprocessor"),
         },
         category_config={
-    "humanactivityevaluation": {
+    "actiondetection": {
         "69": {
             "RenamedTag": "69",
             "MinMarkerDuration": "1s",

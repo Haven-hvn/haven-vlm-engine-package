@@ -28,9 +28,10 @@ class ParallelBinarySearchEngine:
     """
     
     def __init__(
-        self,
+        self, 
         action_tags: Optional[List[str]] = None,
         threshold: float = 0.5,
+        device_str: Optional[str] = None,
         use_half_precision: bool = True,
         progress_callback: Optional[Callable[[int], None]] = None
     ):
@@ -41,7 +42,7 @@ class ParallelBinarySearchEngine:
         # Core components
         self.midpoint_collector = AdaptiveMidpointCollector()
         self.boundary_detector = ActionBoundaryDetector(threshold)
-        self.frame_extractor = VideoFrameExtractor(use_half_precision=use_half_precision)
+        self.frame_extractor = VideoFrameExtractor(device_str, use_half_precision)
         
         # Search state
         self.action_ranges: List[ActionRange] = []
@@ -292,27 +293,27 @@ class ParallelBinarySearchEngine:
     ) -> List[Dict[str, Any]]:
         """
         Phase 1: Linear scan to find candidate action starts.
-
+        
         Process frames at regular intervals to detect when actions transition from absent to present.
         """
         candidate_segments = []
         processed_frame_data = {}
-
+        
         # Track last known state for each action to detect transitions
         last_action_states = {action_tag: False for action_tag in self.action_tags}
-
+        
         # Sample frames at regular intervals. Convert frame_interval from seconds to frames.
         # Ensure frame_step is at least 1 frame.
         frame_step_frames = max(1, int(frame_interval * fps))
-
-        # Calculate number of frames to scan without creating a huge list
-        # Use generator approach to avoid MemoryError for large videos
-        total_scan_frames = (total_frames + frame_step_frames - 1) // frame_step_frames
-        self.logger.info(f"Phase 1: Scanning approximately {total_scan_frames} frames (every {frame_step_frames} frames)")
-
+        scan_frames = list(range(0, total_frames, frame_step_frames))
+        if scan_frames[-1] != total_frames - 1:
+            scan_frames.append(total_frames - 1)  # Always include the last frame
+        
+        self.logger.info(f"Phase 1: Scanning {len(scan_frames)} frames (every {frame_step_frames} frames)")
+        
         # Process frames concurrently
         async def process_scan_frame(frame_idx: int) -> Optional[Dict[str, Any]]:
-            """Process a single frame in linear scan"""
+            """Process a single frame in the linear scan"""
             async with vlm_semaphore:
                 try:
                     # Check VLM cache first
@@ -328,27 +329,25 @@ class ParallelBinarySearchEngine:
                             action_results = await vlm_analyze_function(frame_pil)
                             self.api_calls_made += 1
                             self._cache_vlm_result(vlm_cache_key, action_results)
-
+                    
                     # Store frame result for postprocessing compatibility
                     frame_identifier = float(frame_idx) / fps if use_timestamps else int(frame_idx)
                     return {
                         "frame_index": frame_identifier,
                         "frame_idx": frame_idx,
                         "action_results": action_results,
-                        "humanactivityevaluation": [
-                            (tag, confidence) for tag, confidence in
-                            action_results.items()
+                        "actiondetection": [
+                            (tag, confidence) for tag, confidence in action_results.items()
                             if confidence >= self.threshold
                         ]
                     }
-
+                    
                 except Exception as e:
                     self.logger.error(f"VLM analysis failed for frame {frame_idx}: {e}")
                     return None
-
+        
         # Process all scan frames concurrently with progress updates
-        # Use range() directly instead of list(range()) to avoid MemoryError
-        frame_tasks = [process_scan_frame(frame_idx) for frame_idx in range(0, total_frames, frame_step_frames)]
+        frame_tasks = [process_scan_frame(frame_idx) for frame_idx in scan_frames]
         results = []
         total_scan = len(frame_tasks)
         
@@ -518,7 +517,7 @@ class ParallelBinarySearchEngine:
                             "frame_index": frame_identifier,
                             "frame_idx": frame_idx,
                             "action_results": action_results,
-                            "humanactivityevaluation": [
+                            "actiondetection": [
                                 (tag, confidence) for tag, confidence in action_results.items()
                                 if confidence >= self.threshold
                             ]
@@ -803,7 +802,7 @@ class ParallelBinarySearchEngine:
                 "frame_index": frame_identifier,
                 "frame_idx": midpoint,
                 "action_results": action_results,
-                "humanactivityevaluation": [
+                "actiondetection": [
                     (tag, confidence) for tag, confidence in action_results.items()
                     if confidence >= self.threshold
                 ]

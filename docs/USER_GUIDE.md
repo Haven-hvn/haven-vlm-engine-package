@@ -4,35 +4,58 @@
 
 This guide provides a comprehensive overview of all configuration parameters for the Haven VLM Engine. It simplifies the detailed technical documentation into practical information that users need to know when configuring the system.
 
-The VLM Engine uses four main configuration classes:
-1. **EngineConfig** - Global engine settings and behavior
-2. **PipelineConfig** - Defines processing workflows  
-3. **ModelConfig** - Configures individual AI models and processors
-4. **PipelineModelConfig** - Defines how models integrate into pipelines
+The VLM Engine uses four main configuration structures:
+1. **EngineConfig** - Global engine settings and behavior (dictionary containing `pipelines`, `models`, `category_config`)
+2. **PipelineConfig** - Defines processing workflows (dictionary with `inputs`, `output`, `version`, `models`)
+3. **ModelConfig** - Configures individual AI models and processors (dictionary with model-specific settings)
+4. **PipelineModelConfig** - Defines how models integrate into pipelines (dictionary with `name`, `inputs`, `outputs`)
+
+**Important:** All configurations are defined as Python dictionaries. The system automatically converts these to Pydantic models internally, but you should define them as dictionaries in your configuration files.
+
+Configuration can be provided either as dictionaries or as Pydantic model objects. This guide shows dictionary format, which is the most common approach for configuration files.
 
 ## EngineConfig Parameters
 
 EngineConfig defines the overall engine configuration including available models, pipelines, and global settings.
 
 ### `pipelines` (Required)
-Dictionary of pipeline configurations where keys are pipeline names and values are `PipelineConfig` objects. Each pipeline represents a complete processing workflow.
+Dictionary of pipeline configurations where keys are pipeline names and values are dictionaries containing pipeline settings. Each pipeline represents a complete processing workflow.
 
 **Example:**
 ```python
 pipelines={
-    "video_processor": PipelineConfig(...),
-    "image_analyzer": PipelineConfig(...)
+    "video_pipeline_dynamic": {
+        "inputs": ["video_path", "return_timestamps"],
+        "output": "results",
+        "short_name": "video",
+        "version": 1.0,
+        "models": [...]
+    },
+    "image_analyzer": {
+        "inputs": ["image_path"],
+        "output": "detections",
+        "short_name": "image",
+        "version": 1.0,
+        "models": [...]
+    }
 }
 ```
 
 ### `models` (Required)
-Dictionary of model configurations where keys are model names and values are `ModelConfig` objects. Models defined here can be referenced by pipelines.
+Dictionary of model configurations where keys are model names and values are dictionaries containing model settings. Models defined here can be referenced by pipelines.
 
 **Example:**
 ```python
 models={
-    "vlm_model": ModelConfig(type="vlm_model", ...),
-    "preprocessor": ModelConfig(type="video_preprocessor", ...)
+    "vlm_multiplexer_model": {
+        "type": "vlm_model",
+        "model_id": "zai-org/glm-4.6v-flash",
+        "tag_list": ["throw"]
+    },
+    "binary_search_processor_dynamic": {
+        "type": "binary_search_processor",
+        "model_file_name": "binary_search_processor_dynamic"
+    }
 }
 ```
 
@@ -55,11 +78,11 @@ category_config={
 ```
 
 ### `active_ai_models` (Optional)
-List of AI model names that should be active for dynamic pipeline processing. Defaults to `["llm_vlm_model"]`.
+List of AI model names that should be active for dynamic pipeline processing. Defaults to `["vlm_multiplexer_model"]`.
 
 **Example:**
 ```python
-active_ai_models=["llm_vlm_model", "secondary_model"]
+active_ai_models=["vlm_multiplexer_model", "secondary_model"]
 ```
 
 ## PipelineConfig Parameters
@@ -91,13 +114,21 @@ version=1.0
 ```
 
 ### `models` (Required)
-List of `PipelineModelConfig` objects defining the sequence and configuration of models in the pipeline.
+List of dictionaries defining the sequence and configuration of models in the pipeline.
 
 **Example:**
 ```python
 models=[
-    PipelineModelConfig(name="vlm_model", inputs=["video_frames"], outputs=["detected_tags"]),
-    PipelineModelConfig(name="postprocessor", inputs=["detected_tags"], outputs=["final_result"])
+    {
+        "name": "dynamic_video_ai",
+        "inputs": ["video_path", "return_timestamps", "time_interval", "threshold", "return_confidence", "vr_video", "existing_video_data", "skipped_categories"],
+        "outputs": "results"
+    },
+    {
+        "name": "binary_search_processor_dynamic",
+        "inputs": ["video_path"],
+        "outputs": "results"
+    }
 ]
 ```
 
@@ -119,8 +150,19 @@ Determines which model class to instantiate for processing.
 #### `model_id` (Required for VLM models)
 Primary identifier for the model in API calls. For LLM-based models, this is the complete model identifier (e.g., `"zai-org/glm-4.6v-flash"`).
 
+#### `model_identifier` (Optional)
+Numeric identifier for the model (e.g., `93848`).
+
+#### `model_version` (Optional)
+Version string for the model (e.g., `"1.0"`).
+
+#### `model_file_name` (Optional)
+Filename for the model processor.
+
 #### `api_base_url` (Required for single-endpoint VLM models)
 Base URL for the VLM API endpoint. Forms the complete endpoint URL combined with `model_id`.
+
+**Note:** In multiplexer mode, use `base_url` instead of `api_base_url` in endpoint configurations.
 
 ### Processing Configuration
 
@@ -134,8 +176,8 @@ Maximum number of items to process in a single batch. Controls parallelism and t
 - Larger batches improve API efficiency
 - Smaller batches reduce memory usage
 
-#### `instance_count` (Optional, default: 5)
-Number of model instances to run. Controls parallel processing capacity.
+#### `max_concurrent_requests` (Optional, default: 5)
+Number of concurrent requests to process. Controls parallel processing capacity.
 
 #### `fill_to_batch_size` (Optional, default: True)
 Whether to wait for a full batch before processing.
@@ -191,8 +233,22 @@ List of API endpoints for load balancing and high availability.
 **Example:**
 ```python
 multiplexer_endpoints=[
-    {"api_base_url": "https://api.openai.com/v1", "model_id": "gpt-4-vision-preview"},
-    {"api_base_url": "https://backup-api.com/v1", "model_id": "gpt-4-vision-preview"}
+    {
+        "base_url": "http://localhost:1234/v1",
+        "api_key": "",
+        "name": "lm-studio-primary",
+        "weight": 9,
+        "is_fallback": False,
+        "max_concurrent": 10
+    },
+    {
+        "base_url": "https://cloudagnostic.com:443/v1",
+        "api_key": "",
+        "name": "cloud-fallback",
+        "weight": 1,
+        "is_fallback": True,
+        "max_concurrent": 2
+    }
 ]
 ```
 
@@ -205,7 +261,7 @@ Unique identifier that references a ModelConfig defined in `EngineConfig.models`
 
 **Example:**
 ```python
-name="llm_vlm_model"  # Must match a key in EngineConfig.models dictionary
+name="dynamic_video_ai"  # Must match a key in EngineConfig.models dictionary
 ```
 
 ### `inputs` (Required)
@@ -228,85 +284,105 @@ outputs=["detected_tags", "confidence_scores"]
 
 ## Complete Configuration Example
 
-Here's a complete example showing all configuration classes working together:
+Here's a complete example showing all configuration structures working together:
 
 ```python
-from vlm_engine.config_models import EngineConfig, PipelineConfig, ModelConfig, PipelineModelConfig
-
 # Define model configurations
 models = {
-    "video_preprocessor": ModelConfig(
-        type="video_preprocessor"
-    ),
-    "llm_vlm_model": ModelConfig(
-        type="vlm_model",
-        model_id="zai-org/glm-4.6v-flash",
-        tag_list=["basketball", "soccer", "tennis", "swimming"],
-        api_base_url="https://api.zai.org/v1",
-        max_batch_size=5,
-        instance_count=3,
-        model_return_confidence=True,
-        model_category="sports"
-    ),
-    "post_processor": ModelConfig(
-        type="python",
-        function_name="result_postprocessor"
-    )
+    "vlm_multiplexer_model": {
+        "type": "vlm_model",
+        "model_id": "zai-org/glm-4.6v-flash",
+        "model_identifier": 93848,
+        "model_version": "1.0",
+        "model_file_name": "vlm_multiplexer_model",
+        "model_category": "actiondetection",
+        "tag_list": ["throw"],
+        "use_multiplexer": True,
+        "max_concurrent_requests": 13,
+        "max_batch_size": 4,
+        "multiplexer_endpoints": [
+            {
+                "base_url": "http://localhost:1234/v1",
+                "api_key": "",
+                "name": "lm-studio-primary",
+                "weight": 9,
+                "is_fallback": False,
+                "max_concurrent": 10
+            },
+            {
+                "base_url": "https://cloudagnostic.com:443/v1",
+                "api_key": "",
+                "name": "cloud-fallback",
+                "weight": 1,
+                "is_fallback": True,
+                "max_concurrent": 2
+            }
+        ]
+    },
+    "binary_search_processor_dynamic": {
+        "type": "binary_search_processor",
+        "model_file_name": "binary_search_processor_dynamic"
+    },
+    "result_coalescer": {
+        "type": "python",
+        "model_file_name": "result_coalescer"
+    },
+    "result_finisher": {
+        "type": "python",
+        "model_file_name": "result_finisher"
+    },
+    "batch_awaiter": {
+        "type": "python",
+        "model_file_name": "batch_awaiter"
+    },
+    "video_result_postprocessor": {
+        "type": "python",
+        "model_file_name": "video_result_postprocessor"
+    }
 }
 
 # Define pipeline configuration
 pipelines = {
-    "sports_video_processor": PipelineConfig(
-        inputs=["video_path", "return_timestamps", "threshold"],
-        output="sports_detections",
-        version=1.0,
-        models=[
-            PipelineModelConfig(
-                name="video_preprocessor",
-                inputs=["video_path"],
-                outputs=["video_frames"]
-            ),
-            PipelineModelConfig(
-                name="llm_vlm_model",
-                inputs=["video_frames", "threshold"],
-                outputs=["detected_tags"]
-            ),
-            PipelineModelConfig(
-                name="post_processor",
-                inputs=["detected_tags", "return_timestamps"],
-                outputs=["sports_detections"]
-            )
+    "video_pipeline_dynamic": {
+        "inputs": ["video_path", "return_timestamps", "time_interval", "threshold", "return_confidence", "vr_video", "existing_video_data", "skipped_categories"],
+        "output": "results",
+        "short_name": "dynamic_video",
+        "version": 1.0,
+        "models": [
+            {
+                "name": "dynamic_video_ai",
+                "inputs": ["video_path", "return_timestamps", "time_interval", "threshold", "return_confidence", "vr_video", "existing_video_data", "skipped_categories"],
+                "outputs": "results"
+            },
+            {
+                "name": "binary_search_processor_dynamic",
+                "inputs": ["video_path"],
+                "outputs": "results"
+            }
         ]
-    )
+    }
 }
 
 # Define category configuration
 category_config = {
-    "sports": {
-        "basketball": {
-            "RenamedTag": "Basketball",
-            "MinMarkerDuration": "2s",
-            "MaxGap": "10s",
-            "RequiredDuration": "5s",
-            "TagThreshold": 0.6
-        },
-        "soccer": {
-            "RenamedTag": "Soccer",
-            "MinMarkerDuration": "3s",
-            "MaxGap": "15s",
-            "RequiredDuration": "8s",
-            "TagThreshold": 0.7
+    "actiondetection": {
+        "throw": {
+            "RenamedTag": "throw",
+            "MinMarkerDuration": "1s",
+            "MaxGap": "30s",
+            "RequiredDuration": "1s",
+            "TagThreshold": 0.5
         }
     }
 }
 
 # Create complete engine configuration
-engine_config = EngineConfig(
-    pipelines=pipelines,
-    models=models,
-    category_config=category_config,
-    active_ai_models=["llm_vlm_model"]
-)
+engine_config = {
+    "pipelines": pipelines,
+    "models": models,
+    "category_config": category_config,
+    "active_ai_models": ["vlm_multiplexer_model"]
+}
 ```
 
 ## Quick Start Configuration
@@ -314,33 +390,31 @@ engine_config = EngineConfig(
 For a simple video processing setup:
 
 ```python
-from vlm_engine.config_models import EngineConfig, PipelineConfig, ModelConfig, PipelineModelConfig
-
-config = EngineConfig(
-    models={
-        "simple_vlm": ModelConfig(
-            type="vlm_model",
-            model_id="gpt-4-vision-preview",
-            tag_list=["person", "car", "dog", "cat"],
-            api_base_url="https://api.openai.com/v1",
-            max_batch_size=5
-        )
+config = {
+    "models": {
+        "simple_vlm": {
+            "type": "vlm_model",
+            "model_id": "gpt-4-vision-preview",
+            "tag_list": ["person", "car", "dog", "cat"],
+            "api_base_url": "https://api.openai.com/v1",
+            "max_batch_size": 5
+        }
     },
-    pipelines={
-        "simple_processor": PipelineConfig(
-            inputs=["image_path"],
-            output="detections",
-            version=1.0,
-            models=[
-                PipelineModelConfig(
-                    name="simple_vlm",
-                    inputs=["image_path"],
-                    outputs=["detections"]
-                )
+    "pipelines": {
+        "simple_processor": {
+            "inputs": ["image_path"],
+            "output": "detections",
+            "version": 1.0,
+            "models": [
+                {
+                    "name": "simple_vlm",
+                    "inputs": ["image_path"],
+                    "outputs": ["detections"]
+                }
             ]
-        )
+        }
     },
-    category_config={
+    "category_config": {
         "objects": {
             "person": {"TagThreshold": 0.5},
             "car": {"TagThreshold": 0.5},
@@ -348,7 +422,7 @@ config = EngineConfig(
             "cat": {"TagThreshold": 0.5}
         }
     }
-)
+}
 ```
 
 ## Best Practices
@@ -370,7 +444,7 @@ config = EngineConfig(
 
 ### Performance Tuning
 1. **Batch processing**: Use `fill_to_batch_size=True` for better API efficiency
-2. **Multiple instances**: Increase `instance_count` for higher throughput
+2. **Multiple instances**: Increase `max_concurrent_requests` for higher throughput
 3. **Queue management**: Set `max_queue_size` to prevent memory issues
 
 ## Common Use Cases
@@ -379,28 +453,28 @@ config = EngineConfig(
 ```python
 # For analyzing sports videos
 pipelines={
-    "sports_analyzer": PipelineConfig(
-        inputs=["video_path", "sport_type"],
-        output="analysis_results",
-        version=1.0,
-        models=[
-            PipelineModelConfig(
-                name="frame_extractor",
-                inputs=["video_path"],
-                outputs=["video_frames"]
-            ),
-            PipelineModelConfig(
-                name="sports_detector",
-                inputs=["video_frames", "sport_type"],
-                outputs=["detected_actions"]
-            ),
-            PipelineModelConfig(
-                name="summary_generator",
-                inputs=["detected_actions"],
-                outputs=["analysis_results"]
-            )
+    "sports_analyzer": {
+        "inputs": ["video_path", "sport_type"],
+        "output": "analysis_results",
+        "version": 1.0,
+        "models": [
+            {
+                "name": "frame_extractor",
+                "inputs": ["video_path"],
+                "outputs": ["video_frames"]
+            },
+            {
+                "name": "sports_detector",
+                "inputs": ["video_frames", "sport_type"],
+                "outputs": ["detected_actions"]
+            },
+            {
+                "name": "summary_generator",
+                "inputs": ["detected_actions"],
+                "outputs": ["analysis_results"]
+            }
         ]
-    )
+    }
 }
 ```
 
@@ -408,16 +482,30 @@ pipelines={
 ```python
 # Using multiplexer for high availability
 models={
-    "high_availability_vlm": ModelConfig(
-        type="vlm_model",
-        model_id="gpt-4-vision-preview",
-        use_multiplexer=True,
-        multiplexer_endpoints=[
-            {"api_base_url": "https://primary-api.com/v1", "model_id": "gpt-4-vision-preview"},
-            {"api_base_url": "https://backup-api.com/v1", "model_id": "gpt-4-vision-preview"}
+    "high_availability_vlm": {
+        "type": "vlm_model",
+        "model_id": "gpt-4-vision-preview",
+        "use_multiplexer": True,
+        "multiplexer_endpoints": [
+            {
+                "base_url": "https://primary-api.com/v1",
+                "api_key": "",
+                "name": "primary-endpoint",
+                "weight": 9,
+                "is_fallback": False,
+                "max_concurrent": 10
+            },
+            {
+                "base_url": "https://backup-api.com/v1",
+                "api_key": "",
+                "name": "backup-endpoint",
+                "weight": 1,
+                "is_fallback": True,
+                "max_concurrent": 2
+            }
         ],
-        tag_list=["cat", "dog", "person"]
-    )
+        "tag_list": ["cat", "dog", "person"]
+    }
 }
 ```
 

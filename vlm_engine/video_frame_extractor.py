@@ -17,23 +17,16 @@ import numpy as np
 from .preprocessing import crop_black_bars_lr, is_macos_arm, _pyav_semaphore
 
 if is_macos_arm:
-    try:
-        import av
-    except ImportError:
-        av = None
+    import av
 else:
-    try:
-        import decord
-        # Ensure bridge is set to torch for proper operation
-        decord.bridge.set_bridge('torch')
-    except ImportError:
-        decord = None
+    import decord
+    decord.bridge.set_bridge('torch')
 
 class VideoFrameExtractor:
     """Efficiently extracts specific frames from video files with parallel processing and caching"""
     
-    def __init__(self, use_half_precision: bool = True, max_workers: int = 6):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    def __init__(self, device_str: Optional[str] = None, use_half_precision: bool = True, max_workers: int = 6):
+        self.device = torch.device(device_str) if device_str else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.use_half_precision = use_half_precision
         self.max_workers = max_workers
         self.logger = logging.getLogger("logger")
@@ -149,10 +142,6 @@ class VideoFrameExtractor:
     
     def _extract_frame_decord(self, video_path: str, frame_idx: int) -> Optional[torch.Tensor]:
         """Extract frame using decord"""
-        if decord is None:
-            self.logger.error("decord is not available for video processing. Install with: pip install vlm-engine[decord]")
-            return None
-            
         try:
             # Add timeout protection for decord initialization
             import threading
@@ -163,11 +152,6 @@ class VideoFrameExtractor:
             
             def extract_frame_thread():
                 try:
-                    # Ensure bridge is set to torch before instantiating VideoReader
-                    try:
-                        decord.bridge.set_bridge('torch')
-                    except Exception:
-                        pass
                     vr = decord.VideoReader(video_path, ctx=decord.cpu(0))  # No readahead for 0.6.0
                     self.logger.debug(f'Created VideoReader for {video_path}')
                     
@@ -220,10 +204,6 @@ class VideoFrameExtractor:
     
     def _extract_frame_pyav(self, video_path: str, frame_idx: int) -> Optional[torch.Tensor]:
         """Extract frame using PyAV with resource management and validation"""
-        if av is None:
-            self.logger.error("PyAV is not available for frame extraction")
-            return None
-        
         try:
             if frame_idx < 0:
                 self.logger.warning(f"Frame index {frame_idx} must be non-negative.")

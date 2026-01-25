@@ -11,21 +11,6 @@ A high-performance Python package for Vision-Language Model (VLM) based content 
 - **Customizable Tag Sets**: Easy configuration of detection categories
 - **Production Ready**: Includes retry logic, error handling, and comprehensive logging
 
-## Documentation
-
-- **[USER_GUIDE.md](docs/USER_GUIDE.md)** - Comprehensive configuration guide with detailed parameter descriptions, examples, and best practices
-- **[examples/](examples/)** - Working code examples for various use cases
-- **[MULTIPLEXER_INTEGRATION.md](MULTIPLEXER_INTEGRATION.md)** - Detailed multiplexer setup and configuration
-
-## Features
-
-- **Remote VLM Integration**: Connects to any OpenAI-compatible VLM endpoint (no local model loading required)
-- **Context-Aware Detection**: Leverages Vision-Language Models' understanding of visual relationships for accurate content tagging
-- **Flexible Architecture**: Modular pipeline system with configurable models and processing stages
-- **Asynchronous Processing**: Built on asyncio for efficient video and image processing
-- **Customizable Tag Sets**: Easy configuration of detection categories
-- **Production Ready**: Includes retry logic, error handling, and comprehensive logging
-
 ## Installation
 
 ### From PyPI (when published)
@@ -46,6 +31,7 @@ pip install -e .
 - Compatible VLM server endpoint:
   - Remote OpenAI-compatible API (recommended)
   - Local server using [LM Studio](https://lmstudio.ai/)
+  - Haven's custom VLM available at [https://havenmodels.orbiter.website/](https://havenmodels.orbiter.website/)
 
 ## Quick Start
 
@@ -71,7 +57,7 @@ config = EngineConfig(
 async def main():
     engine = VLMEngine(config)
     await engine.initialize()
-
+    
     results = await engine.process_video(
         "path/to/video.mp4",
         frame_interval=2.0,
@@ -81,8 +67,6 @@ async def main():
 
 asyncio.run(main())
 ```
-
-For more detailed configuration options, parameter descriptions, and best practices, see the [USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ### Multiplexer Configuration (Load Balancing)
 
@@ -152,18 +136,7 @@ config = EngineConfig(
    - Lazy loading for efficient resource usage
    - Thread-safe model access
 
-For detailed architecture information and component interactions, see [USER_GUIDE.md](docs/USER_GUIDE.md).
-
 ## Configuration
-
-The VLM Engine uses four main configuration classes:
-
-1. **EngineConfig** - Global engine settings and behavior
-2. **PipelineConfig** - Defines processing workflows
-3. **ModelConfig** - Configures individual AI models and processors
-4. **PipelineModelConfig** - Defines how models integrate into pipelines
-
-For detailed parameter descriptions, configuration examples, and best practices, see [USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ### Basic Configuration
 
@@ -178,59 +151,28 @@ config = EngineConfig(
             model_id="model-name",
             api_base_url="http://localhost:8000",
             tag_list=["action1", "action2", "action3"],
-            max_batch_size=5,
-            instance_count=3,
-            model_return_confidence=True
+            max_new_tokens=128,
+            request_timeout=70,
+            vlm_detected_tag_confidence=0.99
         )
     },
     pipelines={
         "video_pipeline": PipelineConfig(
             inputs=["video_path", "frame_interval"],
             output="results",
-            version=1.0,
-            models=[
-                PipelineModelConfig(
-                    name="my_vlm_model",
-                    inputs=["video_path"],
-                    outputs=["results"]
-                )
-            ]
+            models=[{"name": "my_vlm_model", "inputs": ["frame"], "outputs": "tags"}]
         )
     }
 )
 ```
 
-### Multiplexer Configuration
+#### Multiplexer Benefits
 
-For high-performance deployments with load balancing:
-
-```python
-from vlm_engine.config_models import ModelConfig
-
-config = EngineConfig(
-    active_ai_models=["vlm_multiplexer_model"],
-    models={
-        "vlm_multiplexer_model": ModelConfig(
-            type="vlm_model",
-            model_id="model-name",
-            use_multiplexer=True,
-            multiplexer_endpoints=[
-                {
-                    "api_base_url": "http://server1:7045/v1",
-                    "model_id": "model-name",
-                    "weight": 5
-                },
-                {
-                    "api_base_url": "http://server2:7045/v1",
-                    "model_id": "model-name",
-                    "weight": 3
-                }
-            ],
-            tag_list=["tag1", "tag2", "tag3"]
-        )
-    }
-)
-```
+- **Load Balancing**: Distribute requests across multiple VLM endpoints based on configurable weights
+- **High Availability**: Automatic failover to backup endpoints when primary endpoints fail
+- **Improved Performance**: Parallel processing across multiple servers for higher throughput
+- **Seamless Integration**: Drop-in replacement for single endpoint configurations
+- **Flexible Configuration**: Mix of primary and fallback endpoints with custom weights
 
 ### Advanced Configuration
 
@@ -239,11 +181,10 @@ The package supports complex configurations including:
 - Custom preprocessing and postprocessing stages
 - Category-specific settings (thresholds, durations, etc.)
 - Batch processing configurations
-- Category filtering and transformation rules
 
 See the [examples](examples/) directory for detailed configuration examples.
 
-For comprehensive configuration details, parameter descriptions, and best practices, see [USER_GUIDE.md](docs/USER_GUIDE.md).
+For comprehensive multiplexer setup and configuration, see [MULTIPLEXER_INTEGRATION.md](MULTIPLEXER_INTEGRATION.md).
 
 ## API Reference
 
@@ -264,8 +205,6 @@ class VLMEngine:
 - `return_timestamps`: Include timestamp information (default: True)
 - `return_confidence`: Include confidence scores (default: True)
 
-For detailed parameter descriptions and configuration options, see [USER_GUIDE.md](docs/USER_GUIDE.md).
-
 ## Performance Optimization
 
 ### Memory Requirements
@@ -275,15 +214,13 @@ For detailed parameter descriptions and configuration options, see [USER_GUIDE.m
 
 ### API Optimization
 - Configure retry settings based on your VLM server's capacity
-- Adjust `max_batch_size` to balance throughput vs memory usage
+- Adjust `max_new_tokens` to balance speed vs accuracy
 - Use appropriate `frame_interval` to reduce processing time and API calls
 
 ### Processing Speed
 - Increase `frame_interval` to sample fewer frames (faster but less accurate)
 - Use batch processing when your VLM endpoint supports it
 - Consider running multiple VLM instances for parallel processing
-
-For detailed performance tuning guidelines and best practices, see [USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ## Extending the Package
 
@@ -315,73 +252,24 @@ custom_pipeline = PipelineConfig(
 )
 ```
 
-For detailed information on model types, pipeline design, and best practices, see [USER_GUIDE.md](docs/USER_GUIDE.md).
-
 ## Troubleshooting
 
 ### Common Issues
 
-1. **"No valid pipelines loaded" Error**
-   - **Cause**: Configuration is missing required pipeline definitions or models
-   - **Solution**: Ensure your `EngineConfig` includes:
-     - At least one pipeline in the `pipelines` dictionary
-     - Models defined in the `models` dictionary that are referenced by pipelines
-     - Valid `active_ai_models` list pointing to existing model names
-   - **Best Practice**: Use the provided [`haven_vlm_config.py`](haven_vlm_config.py:1) as a reference configuration
-
-2. **"Cannot import EngineConfig" Error**
-   - **Cause**: Incorrect import statement
-   - **Solution**: Import from the correct module:
-     ```python
-     from vlm_engine import VLMEngine  # Only VLMEngine is exposed
-     from vlm_engine.config_models import EngineConfig  # Config classes are in separate module
-     ```
-
-3. **Connection Errors**
+1. **Connection Errors**
    - Ensure your VLM server is running and accessible
    - Check the `api_base_url` configuration
    - Verify firewall settings
 
-4. **GPU Memory Errors**
+2. **GPU Memory Errors**
    - Reduce batch size or frame interval
    - Ensure proper CUDA installation
    - Check GPU memory availability
 
-5. **Slow Processing**
+3. **Slow Processing**
    - Increase frame interval for faster processing
    - Use GPU acceleration if available
    - Optimize VLM server settings
-
-### Package Import Best Practices
-
-**What's exposed to consumers:**
-- Only `VLMEngine` is exported via `from vlm_engine import *`
-- All configuration classes are in [`vlm_engine.config_models`](vlm_engine/config_models.py:1)
-- Internal classes (Pipeline, ModelManager, etc.) are not exported
-
-**Correct usage pattern:**
-```python
-# ✅ CORRECT - Import what you need
-from vlm_engine import VLMEngine
-from vlm_engine.config_models import EngineConfig, ModelConfig, PipelineConfig
-
-# ❌ WRONG - Don't try to import internal classes
-from vlm_engine import Pipeline  # This will fail
-from vlm_engine import ModelManager  # This will fail
-```
-
-### Platform-Specific Notes
-
-**macOS Users:**
-- The package uses PyAV for video processing (no decord required)
-- Video preprocessing loads entire videos into system RAM (not GPU memory)
-- Ensure sufficient RAM for your video sizes (e.g., 1GB video may require 4-8GB RAM)
-
-**Linux/Windows Users:**
-- Optionally install decord for faster video decoding: `pip install vlm-engine[decord]`
-- PyAV is the default and works on all platforms
-
-For detailed troubleshooting steps and validation checks, see [USER_GUIDE.md](docs/USER_GUIDE.md).
 
 ### Logging
 
@@ -434,16 +322,10 @@ For questions and discussions, join our community:
 **Note**: This package requires an OpenAI-compatible VLM endpoint. Options include:
 
 ### Remote Services
-- Any OpenAI-compatible API endpoint
+- Any OpenAI-compatible API endpoint 
 - Akash deployment - https://github.com/Haven-hvn/haven-inference
 
 ### Local Setup
 - [LM Studio](https://lmstudio.ai/) - Easy local VLM hosting with OpenAI-compatible API
 
 The package **does not** load VLM models directly - it communicates with external VLM services via API.
-
-## Documentation
-
-- **[USER_GUIDE.md](docs/USER_GUIDE.md)** - Comprehensive configuration guide with detailed parameter descriptions, examples, and best practices
-- **[examples/](examples/)** - Working code examples for various use cases
-- **[MULTIPLEXER_INTEGRATION.md](MULTIPLEXER_INTEGRATION.md)** - Detailed multiplexer setup and configuration

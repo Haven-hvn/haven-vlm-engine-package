@@ -10,23 +10,18 @@ from PIL import Image as PILImage
 
 is_macos_arm = sys.platform == 'darwin' and platform.machine() == 'arm64'
 
-# Import decord at module level with proper bridge setup
-# This MUST be done before any VideoReader is created
-decord = None
 try:
     import decord  # type: ignore
-    # Set bridge to torch immediately after import
-    try:
-        decord.bridge.set_bridge('torch')
-    except Exception as bridge_error:
-        logging.getLogger("logger").warning(f"Failed to set decord bridge to torch: {bridge_error}")
 except ImportError:
     decord = None
-
 try:
     import av  # type: ignore
 except ImportError:
     av = None
+
+# Import bridge set for decord
+if decord is not None:
+    decord.bridge.set_bridge('torch')
 
 # Global semaphore to limit concurrent PyAV operations since FFmpeg is not thread-safe
 # This prevents issues when multiple threads try to decode videos simultaneously
@@ -73,57 +68,29 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
         try:
             # Use semaphore to limit concurrent PyAV operations
             with _pyav_semaphore:
-                # Try with stream_options first, then without if that fails
-                try:
-                    container = av.open(video_path, stream_options={'err_detect': 'ignore_err'})
-                except (TypeError, Exception):
-                    # stream_options may not be supported in older versions
-                    container = av.open(video_path)
-                
+                container = av.open(video_path, stream_options={'err_detect': 'ignore_err'})
                 if not container.streams.video:
                     raise ValueError(f"No video stream found in: {video_path}")
                 stream = container.streams.video[0]
-                fps = float(stream.average_rate) if stream.average_rate is not None else 30.0
-                # Calculate total frames with proper null checks
-                if stream.frames and stream.frames > 0:
-                    total_frames = int(stream.frames)
-                elif stream.duration and stream.time_base:
-                    # Safely calculate total frames from duration
-                    try:
-                        duration_seconds = float(stream.duration * stream.time_base)
-                        total_frames = int(duration_seconds * fps)
-                    except (TypeError, ValueError):
-                        total_frames = 0
-                else:
-                    # Fallback estimation
-                    total_frames = 0
+                fps = float(stream.average_rate)
+                total_frames = stream.frames if stream.frames > 0 else int(stream.duration * fps / stream.time_base)
                 container.close()
-            
-            if total_frames == 0 or fps == 0:
-                raise ValueError(f"Could not extract valid video metadata: {total_frames} frames, {fps} fps from PyAV")
-            
             logger.info(f"Using PyAV for video metadata: {fps} fps, {total_frames} frames")
             return fps, total_frames
         except Exception as e:
             logger.debug(f"PyAV metadata extraction failed: {e}")
     
     # Strategy 2: Fallback to decord
+    if decord is None:
+        raise ImportError("Neither PyAV nor decord available for video processing")
+    
     try:
-        import decord  # type: ignore
-        # Ensure bridge is set to torch before instantiating VideoReader
-        try:
-            decord.bridge.set_bridge('torch')
-            logger.debug("Successfully set decord bridge to torch")
-        except Exception as bridge_error:
-            logger.warning(f"Failed to set decord bridge: {bridge_error}, may cause issues")
         vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
         fps = float(vr.get_avg_fps())
         total_frames = len(vr)
         del vr
         logger.info(f"Using decord for video metadata: {fps} fps, {total_frames} frames")
         return fps, total_frames
-    except ImportError:
-        raise ImportError("Neither PyAV nor decord available for video processing. Install decord with: pip install vlm-engine[decord]")
     except Exception as decord_error:
         logger.error(f"Decord failed to read video {video_path}: {decord_error}")
         
@@ -139,64 +106,15 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
                 header = f.read(16)
                 error_details.append(f"File header (hex): {header.hex()}")
         
-        error_msg = "; ".join(error_details)
-        logger.error(error_msg)
-        
-        # Check if this is a stream index error (corrupted video metadata)
-        decord_error_str = str(decord_error)
-        if "cannot find video stream" in decord_error_str or "stream index" in decord_error_str or "Check failed" in decord_error_str:
-            # Try FFmpeg as last resort
-            try:
-                import subprocess
-                result = subprocess.run(
-                    ['ffprobe', '-v', 'error', '-select_streams', 'v:0', 
-                     '-show_entries', 'stream=r_frame_rate,duration,nb_read_frames',
-                     '-of', 'default=noprint_wrappers=1:nokey=1', video_path],
-                    capture_output=True, text=True, timeout=30
-                )
-                output = result.stdout.strip()
-                if output:
-                    parts = output.split('\n')
-                    if len(parts) >= 2:
-                        try:
-                            framerate_str = parts[0]
-                            if '/' in framerate_str:
-                                num, den = framerate_str.split('/')
-                                fps = float(num) / float(den)
-                            else:
-                                fps = float(framerate_str)
-                            
-                            # Try to get total frames
-                            if len(parts) >= 3 and parts[2]:
-                                total_frames = int(parts[2])
-                            elif len(parts) >= 2 and parts[1]:
-                                duration_str = parts[1]
-                                duration = float(duration_str)
-                                total_frames = int(duration * fps)
-                            else:
-                                total_frames = 0
-                            
-                            logger.info(f"Using FFprobe as fallback: {fps} fps, {total_frames} frames")
-                            return fps, total_frames
-                        except (ValueError, IndexError) as parse_error:
-                            logger.debug(f"Failed to parse FFprobe output: {parse_error}")
-            except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError) as ffprobe_error:
-                logger.debug(f"FFprobe fallback failed: {ffprobe_error}")
-            
-            raise ValueError(
-                f"Video file appears to be corrupted: {video_path}. "
-                f"The video stream metadata is invalid (stream index error). "
-                f"This video cannot be processed and should be re-encoded. {error_msg}"
-            ) from decord_error
-        else:
-            raise ValueError(
-                f"Failed to read video with both PyAV and decord: {video_path}. "
-                f"See debug logs for file diagnostics."
-            ) from decord_error
+        logger.error("; ".join(error_details))
+        raise ValueError(
+            f"Failed to read video with both PyAV and decord: {video_path}. "
+            f"See debug logs for file diagnostics."
+        ) from decord_error
 
 def get_video_duration_decord(video_path: str) -> float:
     try:
-        if is_macos_arm and av is not None:
+        if is_macos_arm:
             # Use semaphore to limit concurrent PyAV operations
             with _pyav_semaphore:
                 container = av.open(video_path, stream_options={'err_detect': 'ignore_err'})
@@ -213,52 +131,23 @@ def get_video_duration_decord(video_path: str) -> float:
                         duration = 0.0
                 container.close()
             return duration
-        elif is_macos_arm:
-            # macOS ARM but av is not available, try decord
-            try:
-                import decord  # type: ignore
-                # Ensure bridge is set to torch before instantiating VideoReader
-                try:
-                    decord.bridge.set_bridge('torch')
-                except Exception:
-                    pass
-                vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
-                num_frames = len(vr)
-                frame_rate = vr.get_avg_fps()
-                if frame_rate == 0: return 0.0
-                duration = num_frames / frame_rate
-                del vr
-                return duration
-            except ImportError:
-                logging.getLogger("logger").error("Neither PyAV nor decord available on macOS ARM")
-                return 0.0
         else:
-            try:
-                import decord  # type: ignore
-                # Ensure bridge is set to torch before instantiating VideoReader
-                try:
-                    decord.bridge.set_bridge('torch')
-                except Exception:
-                    pass
-                vr: decord.VideoReader = decord.VideoReader(video_path, ctx=decord.cpu(0))
-                num_frames: int = len(vr)
-                frame_rate: float = vr.get_avg_fps()
-                if frame_rate == 0: return 0.0
-                duration: float = num_frames / frame_rate
-                del vr
-                return duration
-            except ImportError:
-                logging.getLogger("logger").error("decord not available for video duration calculation")
-                return 0.0
+            vr: decord.VideoReader = decord.VideoReader(video_path, ctx=decord.cpu(0))
+            num_frames: int = len(vr)
+            frame_rate: float = vr.get_avg_fps()
+            if frame_rate == 0: return 0.0
+            duration: float = num_frames / frame_rate
+            del vr
+            return duration
     except Exception as e:
         logging.getLogger("logger").error(f"Error reading video {video_path}: {e}")
         return 0.0
 
-def preprocess_video(video_path: str, frame_interval_sec: float = 0.5, img_size: Union[int, Tuple[int,int]] = 512, use_half_precision: bool = True, use_timestamps: bool = False, vr_video: bool = False, norm_config_idx: int = 1, process_for_vlm: bool = False) -> Iterator[Tuple[Union[int, float], torch.Tensor]]:
-    actual_device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def preprocess_video(video_path: str, frame_interval_sec: float = 0.5, img_size: Union[int, Tuple[int,int]] = 512, use_half_precision: bool = True, device_str: Optional[str] = None, use_timestamps: bool = False, vr_video: bool = False, norm_config_idx: int = 1, process_for_vlm: bool = False) -> Iterator[Tuple[Union[int, float], torch.Tensor]]:
+    actual_device: torch.device = torch.device(device_str) if device_str else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger = logging.getLogger("logger")
 
-    if is_macos_arm and av is not None:
+    if is_macos_arm:
         container = None
         try:
             # Use semaphore to limit concurrent PyAV operations
@@ -323,16 +212,7 @@ def preprocess_video(video_path: str, frame_interval_sec: float = 0.5, img_size:
     else:
         vr = None
         try:
-            import decord  # type: ignore
-            # Ensure bridge is set to torch before instantiating VideoReader
-            try:
-                decord.bridge.set_bridge('torch')
-            except Exception:
-                pass
             vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
-        except ImportError:
-            logger.error(f"decord is not available for video processing. Install with: pip install vlm-engine[decord]")
-            return
         except RuntimeError as e:
             logger.error(f"Decord failed to open video {video_path}: {e}")
             return
