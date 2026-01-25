@@ -24,6 +24,7 @@ if is_macos_arm:
 else:
     try:
         import decord
+        # Ensure bridge is set to torch for proper operation
         decord.bridge.set_bridge('torch')
     except ImportError:
         decord = None
@@ -162,6 +163,11 @@ class VideoFrameExtractor:
             
             def extract_frame_thread():
                 try:
+                    # Ensure bridge is set to torch before instantiating VideoReader
+                    try:
+                        decord.bridge.set_bridge('torch')
+                    except Exception:
+                        pass
                     vr = decord.VideoReader(video_path, ctx=decord.cpu(0))  # No readahead for 0.6.0
                     self.logger.debug(f'Created VideoReader for {video_path}')
                     

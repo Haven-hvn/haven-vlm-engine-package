@@ -10,6 +10,24 @@ from PIL import Image as PILImage
 
 is_macos_arm = sys.platform == 'darwin' and platform.machine() == 'arm64'
 
+def _setup_decord_bridge() -> bool:
+    """
+    Setup decord bridge to torch if decord is available.
+    Returns True if decord was successfully configured, False otherwise.
+    """
+    try:
+        import decord  # type: ignore
+        decord.bridge.set_bridge('torch')
+        return True
+    except ImportError:
+        return False
+    except Exception as e:
+        logging.getLogger("logger").warning(f"Failed to set decord bridge: {e}")
+        return False
+
+# Setup decord bridge early if available
+decord_available = _setup_decord_bridge()
+
 try:
     import av  # type: ignore
 except ImportError:
@@ -75,6 +93,11 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
     # Strategy 2: Fallback to decord
     try:
         import decord  # type: ignore
+        # Ensure bridge is set to torch before instantiating VideoReader
+        try:
+            decord.bridge.set_bridge('torch')
+        except Exception:
+            pass  # Bridge may already be set or incompatible
         vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
         fps = float(vr.get_avg_fps())
         total_frames = len(vr)
@@ -138,6 +161,11 @@ def get_video_duration_decord(video_path: str) -> float:
             # macOS ARM but av is not available, try decord
             try:
                 import decord  # type: ignore
+                # Ensure bridge is set to torch before instantiating VideoReader
+                try:
+                    decord.bridge.set_bridge('torch')
+                except Exception:
+                    pass
                 vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
                 num_frames = len(vr)
                 frame_rate = vr.get_avg_fps()
@@ -151,6 +179,11 @@ def get_video_duration_decord(video_path: str) -> float:
         else:
             try:
                 import decord  # type: ignore
+                # Ensure bridge is set to torch before instantiating VideoReader
+                try:
+                    decord.bridge.set_bridge('torch')
+                except Exception:
+                    pass
                 vr: decord.VideoReader = decord.VideoReader(video_path, ctx=decord.cpu(0))
                 num_frames: int = len(vr)
                 frame_rate: float = vr.get_avg_fps()
@@ -235,6 +268,11 @@ def preprocess_video(video_path: str, frame_interval_sec: float = 0.5, img_size:
         vr = None
         try:
             import decord  # type: ignore
+            # Ensure bridge is set to torch before instantiating VideoReader
+            try:
+                decord.bridge.set_bridge('torch')
+            except Exception:
+                pass
             vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
         except ImportError:
             logger.error(f"decord is not available for video processing. Install with: pip install vlm-engine[decord]")
