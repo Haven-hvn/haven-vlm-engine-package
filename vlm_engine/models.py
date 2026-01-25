@@ -134,16 +134,25 @@ class VLMAIModel(Model):
 class PythonModel(Model):
     def __init__(self, configValues: ModelConfig):
         super().__init__(configValues)
+        self.logger.debug(f"[DEBUG_PYTHON_MODEL] PythonModel.__init__ called, configValues type: {type(configValues).__name__}")
         self.function_name: Optional[str] = configValues.function_name
+        self.logger.debug(f"[DEBUG_PYTHON_MODEL] function_name from configValues: {repr(self.function_name)}")
         if self.function_name is None:
+            self.logger.error(f"[DEBUG_PYTHON_MODEL] ERROR: function_name is None! Full config: {configValues.dict()}")
             raise ValueError("function_name is required for models of type python")
+        if self.function_name == "":
+            self.logger.error(f"[DEBUG_PYTHON_MODEL] ERROR: function_name is empty string! Full config: {configValues.dict()}")
         module_name: str = "vlm_engine.python_functions"
         try:
+            self.logger.debug(f"[DEBUG_PYTHON_MODEL] Importing module '{module_name}' for function '{self.function_name}'")
             module: types.ModuleType = import_module(module_name)
             self.function: Callable[[List['QueueItem']], None] = getattr(module, self.function_name)
+            self.logger.debug(f"[DEBUG_PYTHON_MODEL] Successfully imported function '{self.function_name}' from module '{module_name}'")
         except ImportError:
+            self.logger.error(f"[DEBUG_PYTHON_MODEL] ImportError: Module '{module_name}' not found.")
             raise ImportError(f"Module '{module_name}' not found.")
         except AttributeError:
+            self.logger.error(f"[DEBUG_PYTHON_MODEL] AttributeError: Function '{self.function_name}' not found in module '{module_name}'.")
             raise AttributeError(f"Function '{self.function_name}' not found in module '{module_name}'.")
 
     async def worker_function(self, data: List['QueueItem']) -> None:
@@ -220,11 +229,16 @@ class ModelManager:
         return self.models[modelName]
     
     def create_model(self, modelName: str) -> Optional['ModelProcessor']:
+        self.logger.debug(f"[DEBUG_CREATE_MODEL] Creating model: {modelName}")
         if modelName not in self.models_config:
+            self.logger.error(f"[DEBUG_CREATE_MODEL] Model '{modelName}' not found in configuration!")
             raise ValueError(f"Model '{modelName}' not found in configuration.")
         
         model_config = self.models_config[modelName]
+        self.logger.debug(f"[DEBUG_CREATE_MODEL] Model config for {modelName}: type={model_config.type}, function_name={repr(getattr(model_config, 'function_name', 'NO_ATTR'))}")
+        
         model_processor_instance: 'ModelProcessor' = self.model_factory(model_config)
+        self.logger.debug(f"[DEBUG_CREATE_MODEL] Successfully created model: {modelName}")
         return model_processor_instance
     
     def model_factory(self, model_config: ModelConfig) -> 'ModelProcessor':
@@ -232,24 +246,38 @@ class ModelManager:
         from .async_utils import ModelProcessor
         
         model_type: str = model_config.type
+        self.logger.debug(f"[DEBUG_MODEL_FACTORY] Creating model of type: {model_type}")
+        self.logger.debug(f"[DEBUG_MODEL_FACTORY] Full model config: {model_config.dict()}")
+        
+        if model_type == 'python':
+            self.logger.debug(f"[DEBUG_MODEL_FACTORY] Python model detected! function_name: {repr(model_config.function_name)}")
+            if model_config.function_name is None:
+                self.logger.error(f"[DEBUG_MODEL_FACTORY] ⚠️ CRITICAL: Python model with None function_name!")
+            elif model_config.function_name == "":
+                self.logger.error(f"[DEBUG_MODEL_FACTORY] ⚠️ CRITICAL: Python model with empty string function_name!")
         
         model_instance: Any
         match model_type:
             case "video_preprocessor":
+                self.logger.debug(f"[DEBUG_MODEL_FACTORY] Creating VideoPreprocessorModel")
                 model_instance = VideoPreprocessorModel(model_config)
                 return ModelProcessor(model_instance)
             case "binary_search_processor":
                 # New binary search processor for optimized video processing
+                self.logger.debug(f"[DEBUG_MODEL_FACTORY] Creating BinarySearchProcessor")
                 from .binary_search_processor import BinarySearchProcessor
                 model_instance = BinarySearchProcessor(model_config)
                 return ModelProcessor(model_instance)
             case "vlm_model":
+                self.logger.debug(f"[DEBUG_MODEL_FACTORY] Creating VLMAIModel")
                 model_instance = VLMAIModel(model_config)
                 model_processor: ModelProcessor = ModelProcessor(model_instance)
                 self.ai_models.append(model_processor)
                 return model_processor
             case "python":
+                self.logger.debug(f"[DEBUG_MODEL_FACTORY] Creating PythonModel with function_name='{model_config.function_name}'")
                 model_instance = PythonModel(model_config)
                 return ModelProcessor(model_instance)
             case _:
+                self.logger.error(f"[DEBUG_MODEL_FACTORY] Unrecognized model type: {model_type}")
                 raise ValueError(f"Model type '{model_type}' not recognized!")

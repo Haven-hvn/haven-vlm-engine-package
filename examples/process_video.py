@@ -49,10 +49,10 @@ async def main():
     "Undressing", "Vaginal Penetration", "Vaginal Fucking", "Vibrating"
 ]
             ),
-            "result_coalescer": ModelConfig(type="python"),
-            "result_finisher": ModelConfig(type="python"),
-            "batch_awaiter": ModelConfig(type="python"),
-            "video_result_postprocessor": ModelConfig(type="python"),
+            "result_coalescer": ModelConfig(type="python", function_name="result_coalescer"),
+            "result_finisher": ModelConfig(type="python", function_name="result_finisher"),
+            "batch_awaiter": ModelConfig(type="python", function_name="batch_awaiter"),
+            "video_result_postprocessor": ModelConfig(type="python", function_name="video_result_postprocessor"),
         },
         category_config={
     "humanactivityevaluation": {

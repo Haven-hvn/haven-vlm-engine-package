@@ -99,21 +99,31 @@ class PipelineManager:
         self.dynamic_ai_manager = dynamic_ai_manager
     
     async def load_pipelines(self):
+        self.logger.debug(f"[DEBUG_PIPELINE_LOAD] Starting to load pipelines from config: {list(self.pipelines_config.keys())}")
         for pipeline_name, pipeline_config in self.pipelines_config.items():
             self.logger.info(f"Loading pipeline: {pipeline_name}")
+            self.logger.debug(f"[DEBUG_PIPELINE_LOAD] Pipeline config for {pipeline_name}: inputs={pipeline_config.inputs}, output={pipeline_config.output}, version={pipeline_config.version}")
+            
             try:
+                self.logger.debug(f"[DEBUG_PIPELINE_LOAD] Creating Pipeline instance for {pipeline_name}")
                 new_pipeline = Pipeline(pipeline_config, self.model_manager, self.category_config, self.dynamic_ai_manager)
                 self.pipelines[pipeline_name] = new_pipeline
+                self.logger.debug(f"[DEBUG_PIPELINE_LOAD] Starting model processing for pipeline {pipeline_name}")
                 await new_pipeline.start_model_processing()
                 self.logger.info(f"Pipeline {pipeline_name} loaded successfully!")
+                self.logger.debug(f"[DEBUG_PIPELINE_LOAD] Pipeline {pipeline_name} loaded successfully!")
             except Exception as e:
+                self.logger.error(f"[DEBUG_PIPELINE_LOAD] ERROR loading pipeline {pipeline_name}: {e}")
                 if pipeline_name in self.pipelines:
                     del self.pipelines[pipeline_name]
                 self.logger.error(f"Error loading pipeline {pipeline_name}: {e}")
-                self.logger.debug("Exception details:", exc_info=True)
+                self.logger.debug(f"[DEBUG_PIPELINE_LOAD] Exception details:", exc_info=True)
             
         if not self.pipelines:
+            self.logger.error(f"[DEBUG_PIPELINE_LOAD] CRITICAL: No valid pipelines loaded after processing all pipelines!")
             raise Exception("Error: No valid pipelines loaded!")
+        else:
+            self.logger.debug(f"[DEBUG_PIPELINE_LOAD] Successfully loaded {len(self.pipelines)} pipelines: {list(self.pipelines.keys())}")
             
     def get_pipeline(self, pipeline_name: str) -> Pipeline:
         if pipeline_name not in self.pipelines:
