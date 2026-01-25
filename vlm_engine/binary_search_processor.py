@@ -64,7 +64,21 @@ class BinarySearchProcessor:
     async def _process_video_item(self, item: QueueItem) -> None:
         """Core video processing logic for a single item"""
         item_future: ItemFuture = item.item_future
+        
+        # Validate item_future has data
+        if item_future.data is None:
+            self.logger.error(f"ItemFuture.data is None - cannot process item. Input names: {item.input_names}")
+            # Try to get some info about the item itself
+            if hasattr(item, 'item_future') and item.item_future is not None:
+                self.logger.error(f"ItemFuture attributes: {dir(item_future)}")
+            raise ValueError("ItemFuture data is None - item may have been already processed or failed to initialize")
+        
         video_path: str = item_future[item.input_names[0]]
+        if video_path is None:
+            self.logger.error(f"video_path is None. Input names: {item.input_names}")
+            self.logger.error(f"ItemFuture.data keys: {list(item_future.data.keys()) if item_future.data else 'None'}")
+            raise ValueError(f"video_path (key '{item.input_names[0]}') not found in ItemFuture.data")
+        
         use_timestamps: bool = item_future[item.input_names[1]]
         frame_interval_override: Optional[float] = item_future[item.input_names[2]] if item.input_names[2] in item_future else None
         threshold: float = item_future[item.input_names[3]] if item.input_names[3] in item_future else 0.5
@@ -87,7 +101,10 @@ class BinarySearchProcessor:
         self.logger.info(f"[DEBUG] VLM config extracted: {vlm_config is not None}")
         if vlm_config is None:
             self.logger.error("No VLM configuration found - falling back to linear processing")
-            await self._fallback_linear_processing(item)
+            # Pass video_path since item_future.data might be cleared later
+            await self._fallback_linear_processing(item, video_path, use_timestamps,
+                                                frame_interval_override, threshold,
+                                                return_confidence, vr_video)
             return
 
         # Extract action tags from VLM config
@@ -207,8 +224,13 @@ class BinarySearchProcessor:
                             vlm_config = model_wrapper.model.client_config.model_dump()
                         
                         # Path 2: Check if model.model has client_config (nested model structure)
-                        if not vlm_config and hasattr(model_wrapper.model, 'model') and hasattr(model_wrapper.model.model, 'client_config'):
-                            vlm_config = model_wrapper.model.model.client_config.model_dump()
+                        if not vlm_config and hasattr(model_wrapper.model, 'model'):
+                            self.logger.debug(f"[DEBUG_VLM_CONFIG] Path 2: model_wrapper.model.model exists, type={type(model_wrapper.model.model).__name__}")
+                            if hasattr(model_wrapper.model.model, 'client_config'):
+                                self.logger.debug(f"[DEBUG_VLM_CONFIG] Path 2: model_wrapper.model.model has client_config")
+                                vlm_config = model_wrapper.model.model.client_config.model_dump()
+                            else:
+                                self.logger.debug(f"[DEBUG_VLM_CONFIG] Path 2: model_wrapper.model.model does NOT have client_config, attrs={dir(model_wrapper.model.model)}")
                         
                         if vlm_config:
                             self.logger.debug(f"[DEBUG_VLM_CONFIG] Found VLM config with keys: {list(vlm_config.keys())}")
@@ -240,19 +262,20 @@ class BinarySearchProcessor:
             self.logger.error(f"Failed to get VLM coordinator: {e}")
             return None
 
-    async def _fallback_linear_processing(self, item: QueueItem) -> None:
+    async def _fallback_linear_processing(self, item: QueueItem, video_path: str,
+                                     use_timestamps: bool, frame_interval_override: Optional[float],
+                                     threshold: float, return_confidence: bool, vr_video: bool) -> None:
         """Fallback to original linear processing if binary search fails"""
-
+        
         item_future = item.item_future
         self.logger.info(f"[DEBUG] FALLBACK: Using linear processing for video")
 
-        video_path: str = item_future[item.input_names[0]]
-        use_timestamps: bool = item_future[item.input_names[1]]
-        frame_interval_override: Optional[float] = item_future[item.input_names[2]] if item.input_names[2] in item_future else None
         current_frame_interval: float = frame_interval_override if frame_interval_override is not None else 0.5
-        vr_video: bool = item_future[item.input_names[5]] if item.input_names[5] in item_future else False
 
-        callback = item_future["callback"] if "callback" in item_future else None
+        # Get callback but handle case where data might be None
+        callback = None
+        if item_future.data is not None and "callback" in item_future:
+            callback = item_future["callback"]
         if callback:
             callback(0)
 
@@ -273,9 +296,9 @@ class BinarySearchProcessor:
             future_data_payload = {
                 "dynamic_frame": frame_tensor,
                 "frame_index": frame_index,
-                "dynamic_threshold": item_future[item.input_names[3]] if item.input_names[3] in item_future else 0.5,
-                "dynamic_return_confidence": item_future[item.input_names[4]] if item.input_names[4] in item_future else True,
-                "dynamic_skipped_categories": item_future[item.input_names[6]] if item.input_names[6] in item_future else None
+                "dynamic_threshold": threshold,
+                "dynamic_return_confidence": return_confidence,
+                "dynamic_skipped_categories": None
             }
             result_future = await ItemFuture.create(item_future, future_data_payload, item_future.handler)
             await result_future.set_data("frame_index", frame_index)
