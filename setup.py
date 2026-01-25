@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="vlm_engine",
-    version="0.8.6",
+    version="0.8.7",
     description="Advanced Vision-Language Model Engine for content tagging",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -22,7 +22,7 @@ setup(
         "multiplexer-llm==0.2.3"
     ],
     extras_require={
-        "decord": ["decord"],  # Optional: for faster video decoding on x86_64 Linux/Windows
+        "decord": ["decord"],  # Made mandatory for binary search video decoding
     },
     classifiers=[
         "Development Status :: 3 - Alpha",
