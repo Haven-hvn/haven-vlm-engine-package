@@ -83,9 +83,25 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
                 if not container.streams.video:
                     raise ValueError(f"No video stream found in: {video_path}")
                 stream = container.streams.video[0]
-                fps = float(stream.average_rate)
-                total_frames = stream.frames if stream.frames > 0 else int(stream.duration * fps / stream.time_base)
+                fps = float(stream.average_rate) if stream.average_rate is not None else 30.0
+                # Calculate total frames with proper null checks
+                if stream.frames and stream.frames > 0:
+                    total_frames = int(stream.frames)
+                elif stream.duration and stream.time_base:
+                    # Safely calculate total frames from duration
+                    try:
+                        duration_seconds = float(stream.duration * stream.time_base)
+                        total_frames = int(duration_seconds * fps)
+                    except (TypeError, ValueError):
+                        total_frames = 0
+                else:
+                    # Fallback estimation
+                    total_frames = 0
                 container.close()
+            
+            if total_frames == 0 or fps == 0:
+                raise ValueError(f"Could not extract valid video metadata: {total_frames} frames, {fps} fps from PyAV")
+            
             logger.info(f"Using PyAV for video metadata: {fps} fps, {total_frames} frames")
             return fps, total_frames
         except Exception as e:
@@ -128,7 +144,45 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
         
         # Check if this is a stream index error (corrupted video metadata)
         decord_error_str = str(decord_error)
-        if "cannot find video stream" in decord_error_str or "stream index" in decord_error_str:
+        if "cannot find video stream" in decord_error_str or "stream index" in decord_error_str or "Check failed" in decord_error_str:
+            # Try FFmpeg as last resort
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ['ffprobe', '-v', 'error', '-select_streams', 'v:0', 
+                     '-show_entries', 'stream=r_frame_rate,duration,nb_read_frames',
+                     '-of', 'default=noprint_wrappers=1:nokey=1', video_path],
+                    capture_output=True, text=True, timeout=30
+                )
+                output = result.stdout.strip()
+                if output:
+                    parts = output.split('\n')
+                    if len(parts) >= 2:
+                        try:
+                            framerate_str = parts[0]
+                            if '/' in framerate_str:
+                                num, den = framerate_str.split('/')
+                                fps = float(num) / float(den)
+                            else:
+                                fps = float(framerate_str)
+                            
+                            # Try to get total frames
+                            if len(parts) >= 3 and parts[2]:
+                                total_frames = int(parts[2])
+                            elif len(parts) >= 2 and parts[1]:
+                                duration_str = parts[1]
+                                duration = float(duration_str)
+                                total_frames = int(duration * fps)
+                            else:
+                                total_frames = 0
+                            
+                            logger.info(f"Using FFprobe as fallback: {fps} fps, {total_frames} frames")
+                            return fps, total_frames
+                        except (ValueError, IndexError) as parse_error:
+                            logger.debug(f"Failed to parse FFprobe output: {parse_error}")
+            except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError) as ffprobe_error:
+                logger.debug(f"FFprobe fallback failed: {ffprobe_error}")
+            
             raise ValueError(
                 f"Video file appears to be corrupted: {video_path}. "
                 f"The video stream metadata is invalid (stream index error). "
