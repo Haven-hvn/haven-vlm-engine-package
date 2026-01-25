@@ -10,23 +10,18 @@ from PIL import Image as PILImage
 
 is_macos_arm = sys.platform == 'darwin' and platform.machine() == 'arm64'
 
-def _setup_decord_bridge() -> bool:
-    """
-    Setup decord bridge to torch if decord is available.
-    Returns True if decord was successfully configured, False otherwise.
-    """
+# Import decord at module level with proper bridge setup
+# This MUST be done before any VideoReader is created
+decord = None
+try:
+    import decord  # type: ignore
+    # Set bridge to torch immediately after import
     try:
-        import decord  # type: ignore
         decord.bridge.set_bridge('torch')
-        return True
-    except ImportError:
-        return False
-    except Exception as e:
-        logging.getLogger("logger").warning(f"Failed to set decord bridge: {e}")
-        return False
-
-# Setup decord bridge early if available
-decord_available = _setup_decord_bridge()
+    except Exception as bridge_error:
+        logging.getLogger("logger").warning(f"Failed to set decord bridge to torch: {bridge_error}")
+except ImportError:
+    decord = None
 
 try:
     import av  # type: ignore
@@ -78,7 +73,13 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
         try:
             # Use semaphore to limit concurrent PyAV operations
             with _pyav_semaphore:
-                container = av.open(video_path, stream_options={'err_detect': 'ignore_err'})
+                # Try with stream_options first, then without if that fails
+                try:
+                    container = av.open(video_path, stream_options={'err_detect': 'ignore_err'})
+                except (TypeError, Exception):
+                    # stream_options may not be supported in older versions
+                    container = av.open(video_path)
+                
                 if not container.streams.video:
                     raise ValueError(f"No video stream found in: {video_path}")
                 stream = container.streams.video[0]
@@ -96,8 +97,9 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
         # Ensure bridge is set to torch before instantiating VideoReader
         try:
             decord.bridge.set_bridge('torch')
-        except Exception:
-            pass  # Bridge may already be set or incompatible
+            logger.debug("Successfully set decord bridge to torch")
+        except Exception as bridge_error:
+            logger.warning(f"Failed to set decord bridge: {bridge_error}, may cause issues")
         vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
         fps = float(vr.get_avg_fps())
         total_frames = len(vr)
