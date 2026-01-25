@@ -21,7 +21,7 @@ class Pipeline:
             model_inputs: List[str] = model_config.inputs
             model_outputs: Union[str, List[str]] = model_config.outputs
 
-            if modelName == "dynamic_video_ai":
+            if modelName == "video_analysis_pipeline":
                 dynamic_models: List[ModelWrapper] = dynamic_ai_manager.get_dynamic_video_ai_models(model_inputs, model_outputs if isinstance(model_outputs, list) else [model_outputs] if model_outputs else [])
                 self.models.extend(dynamic_models)
                 continue
