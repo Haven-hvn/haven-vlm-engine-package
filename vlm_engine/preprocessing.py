@@ -82,7 +82,7 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
         logger.info(f"Using decord for video metadata: {fps} fps, {total_frames} frames")
         return fps, total_frames
     except ImportError:
-        raise ImportError("Neither PyAV nor decord available for video processing")
+        raise ImportError("Neither PyAV nor decord available for video processing. Install decord with: pip install vlm-engine[decord]")
     except Exception as decord_error:
         logger.error(f"Decord failed to read video {video_path}: {decord_error}")
         
@@ -223,7 +223,11 @@ def preprocess_video(video_path: str, frame_interval_sec: float = 0.5, img_size:
     else:
         vr = None
         try:
+            import decord  # type: ignore
             vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
+        except ImportError:
+            logger.error(f"decord is not available for video processing. Install with: pip install vlm-engine[decord]")
+            return
         except RuntimeError as e:
             logger.error(f"Decord failed to open video {video_path}: {e}")
             return

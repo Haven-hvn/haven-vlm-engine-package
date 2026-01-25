@@ -22,8 +22,11 @@ if is_macos_arm:
     except ImportError:
         av = None
 else:
-    import decord
-    decord.bridge.set_bridge('torch')
+    try:
+        import decord
+        decord.bridge.set_bridge('torch')
+    except ImportError:
+        decord = None
 
 class VideoFrameExtractor:
     """Efficiently extracts specific frames from video files with parallel processing and caching"""
@@ -145,6 +148,10 @@ class VideoFrameExtractor:
     
     def _extract_frame_decord(self, video_path: str, frame_idx: int) -> Optional[torch.Tensor]:
         """Extract frame using decord"""
+        if decord is None:
+            self.logger.error("decord is not available for video processing. Install with: pip install vlm-engine[decord]")
+            return None
+            
         try:
             # Add timeout protection for decord initialization
             import threading
