@@ -69,9 +69,14 @@ class BinarySearchProcessor:
         frame_interval_override: Optional[float] = item_future[item.input_names[2]] if item.input_names[2] in item_future else None
         threshold: float = item_future[item.input_names[3]] if item.input_names[3] in item_future else 0.5
         return_confidence: bool = item_future[item.input_names[4]] if item.input_names[4] in item_future else True
+        vr_video: bool = item_future[item.input_names[5]] if len(item.input_names) > 5 and item.input_names[5] in item_future else False
+        existing_video_data: Optional[Dict] = item_future[item.input_names[6]] if len(item.input_names) > 6 and item.input_names[6] in item_future else None
+        skipped_categories: Optional[List] = item_future[item.input_names[7]] if len(item.input_names) > 7 and item.input_names[7] in item_future else None
 
         self.logger.info(f"[DEBUG] BinarySearchProcessor._process_video_item: Starting processing for {video_path}")
         self.logger.info(f"[DEBUG] ItemFuture.data keys: {list(item_future.data.keys()) if item_future.data else 'None'}")
+        self.logger.info(f"[DEBUG] Input names: {item.input_names}")
+        self.logger.info(f"[DEBUG] Output names: {item.output_names}")
 
         callback = item_future["callback"] if "callback" in item_future else None
         if callback:
@@ -159,6 +164,20 @@ class BinarySearchProcessor:
             children.append(result_future)
         
         await item_future.set_data(item.output_names[0], children)
+        
+        # Set frame_results for video_result_postprocessor which expects this key
+        await item_future.set_data("frame_results", frame_results)
+        
+        # Pass through any other parameters needed by downstream processors
+        if video_path:
+            await item_future.set_data("video_path", video_path)
+        if frame_interval_override is not None:
+            await item_future.set_data("time_interval", frame_interval_override)
+        if threshold is not None:
+            await item_future.set_data("threshold", threshold)
+        if existing_video_data is not None:
+            await item_future.set_data("existing_video_data", existing_video_data)
+        
         self.logger.info(f"Binary search completed: {len(children)} frames processed with {engine.api_calls_made} API calls")
         self.logger.info(f"[DEBUG] Child ItemFuture data keys sample: {list(children[0].data.keys()) if children else 'N/A'}")
 

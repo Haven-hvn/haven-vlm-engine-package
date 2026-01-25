@@ -98,11 +98,22 @@ def get_video_metadata(video_path: str, logger: Optional[logging.Logger] = None)
                 header = f.read(16)
                 error_details.append(f"File header (hex): {header.hex()}")
         
-        logger.error("; ".join(error_details))
-        raise ValueError(
-            f"Failed to read video with both PyAV and decord: {video_path}. "
-            f"See debug logs for file diagnostics."
-        ) from decord_error
+        error_msg = "; ".join(error_details)
+        logger.error(error_msg)
+        
+        # Check if this is a stream index error (corrupted video metadata)
+        decord_error_str = str(decord_error)
+        if "cannot find video stream" in decord_error_str or "stream index" in decord_error_str:
+            raise ValueError(
+                f"Video file appears to be corrupted: {video_path}. "
+                f"The video stream metadata is invalid (stream index error). "
+                f"This video cannot be processed and should be re-encoded. {error_msg}"
+            ) from decord_error
+        else:
+            raise ValueError(
+                f"Failed to read video with both PyAV and decord: {video_path}. "
+                f"See debug logs for file diagnostics."
+            ) from decord_error
 
 def get_video_duration_decord(video_path: str) -> float:
     try:
