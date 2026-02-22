@@ -1,8 +1,14 @@
 from setuptools import setup, find_packages
 
+# Note: This package uses CPU-only PyTorch by default to minimize installation size.
+# For GPU support, install with: pip install "vlm_engine[gpu]"
+#
+# Or manually install PyTorch with CUDA:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
 setup(
     name="vlm_engine",
-    version="0.9.1",
+    version="0.9.2",
     description="Advanced Vision-Language Model Engine for content tagging",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -22,6 +28,21 @@ setup(
         "requests",
         "multiplexer-llm==0.2.3"
     ],
+    extras_require={
+        # GPU support - installs CUDA-enabled PyTorch
+        # Note: Users should uninstall CPU torch first: pip uninstall torch torchvision
+        "gpu": [
+            "torch>=2.0.0",
+            "torchvision>=0.15.0",
+        ],
+        # Development dependencies
+        "dev": [
+            "pytest>=7.0.0",
+            "pytest-asyncio>=0.21.0",
+            "black>=23.0.0",
+            "mypy>=1.0.0",
+        ],
+    },
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
