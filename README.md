@@ -13,82 +13,16 @@ A high-performance Python package for Vision-Language Model (VLM) based content 
 
 ## Installation
 
-### From PyPI (when published)
-
-#### CPU-only Installation (Default, Recommended)
-For most use cases (including AWS batch jobs), install the CPU-only version which is ~3GB smaller:
-```bash
-pip install vlm-engine --index-url https://download.pytorch.org/whl/cpu
-```
-
-#### GPU Installation (CUDA-enabled)
-If you need GPU support for local model inference (not required for VLM API usage):
-```bash
-pip install vlm-engine
-```
-
 ### From Source
 
-#### CPU-only Installation (Default, Recommended)
-```bash
-git clone https://github.com/Haven-hvn/haven-vlm-engine-package.git
-cd haven-vlm-engine-package
-pip install -e . --index-url https://download.pytorch.org/whl/cpu
-```
-
-#### GPU Installation (CUDA-enabled)
 ```bash
 git clone https://github.com/Haven-hvn/haven-vlm-engine-package.git
 cd haven-vlm-engine-package
 pip install -e .
 ```
 
-### Installation Notes
-
-**Why CPU-only by default?**
-- This package connects to REMOTE OpenAI-compatible VLM endpoints - it never loads models locally
-- PyTorch is only used for image preprocessing (tensor operations, transforms)
-- CUDA-enabled PyTorch adds ~3GB of unnecessary dependencies for CPU-only workloads
-- Perfect for Docker deployments and AWS batch jobs
-
-**Switching between CPU and GPU:**
-```bash
-# Switch from GPU to CPU
-pip uninstall torch torchvision
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-
-# Switch from CPU to GPU (CUDA 12.1)
-pip uninstall torch torchvision
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-```
-
-### Docker Optimization
-
-For Docker deployments (especially AWS batch jobs), use CPU-only PyTorch to reduce image size by ~3GB:
-
-```dockerfile
-FROM python:3.10-slim
-
-WORKDIR /app
-
-# Install vlm_engine with CPU-only PyTorch
-RUN pip install --no-cache-dir \
-    --index-url https://download.pytorch.org/whl/cpu \
-    vlm_engine
-
-# Copy your application
-COPY . .
-
-CMD ["python", "your_batch_job.py"]
-```
-
-**Size comparison:**
-- With CUDA PyTorch: ~5GB image
-- With CPU-only PyTorch: ~2GB image (60% smaller)
-
 ### Requirements
 - Python 3.8+
-- **Sufficient RAM**: Video preprocessing loads entire videos into memory (not GPU memory)
 - Compatible VLM server endpoint:
   - Remote OpenAI-compatible API (recommended)
   - Local server using [LM Studio](https://lmstudio.ai/)
@@ -269,7 +203,7 @@ class VLMEngine:
 ## Performance Optimization
 
 ### Memory Requirements
-- **Important**: Video preprocessing loads the entire video into system RAM (not GPU memory)
+- Video preprocessing loads the entire video into system RAM
 - Ensure sufficient RAM for your video sizes (e.g., a 1GB video may require 4-8GB of available RAM)
 - Consider processing videos in segments for very large files
 
@@ -322,30 +256,9 @@ custom_pipeline = PipelineConfig(
    - Check the `api_base_url` configuration
    - Verify firewall settings
 
-2. **GPU Memory Errors**
-   - This package uses CPU by default for preprocessing - GPU memory errors should not occur
-   - If using GPU-enabled PyTorch, ensure proper CUDA installation
-   - Check GPU memory availability
-
-3. **Slow Processing**
+2. **Slow Processing**
    - Increase frame interval for faster processing
-   - The package uses CPU for preprocessing which is sufficient for VLM API usage
    - Optimize VLM server settings
-
-4. **PyTorch Installation Issues**
-   - **Issue**: `torch` package is very large (~3GB for CUDA version)
-   - **Solution**: Use CPU-only PyTorch for ~90% smaller install:
-     ```bash
-     pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-     ```
-   - **Issue**: Need to switch between CPU and GPU versions
-   - **Solution**: Uninstall first, then reinstall with correct index URL:
-     ```bash
-     pip uninstall torch torchvision
-     pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu  # CPU
-     # OR
-     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121  # GPU
-     ```
 
 ### Logging
 

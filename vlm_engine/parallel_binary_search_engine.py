@@ -13,8 +13,6 @@ from PIL import Image
 from collections import defaultdict
 import gc
 from contextlib import contextmanager
-import psutil
-
 from .action_range import ActionRange
 from .adaptive_midpoint_collector import AdaptiveMidpointCollector
 from .action_boundary_detector import ActionBoundaryDetector
@@ -834,11 +832,6 @@ class ParallelBinarySearchEngine:
         yield frame_tensor, frame_pil
         del frame_tensor, frame_pil
         gc.collect()
-        log_msg = f'RAM after release for frame {frame_idx}'
-        if phase:
-            log_msg += f' in {phase}'
-        log_msg += f': {psutil.Process().memory_info().rss / 1024**2:.1f} MB'
-        self.logger.info(log_msg)
 
     def _call_progress(self, progress: int):
         if self.progress_callback:
