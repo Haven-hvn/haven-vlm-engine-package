@@ -8,7 +8,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="vlm_engine",
-    version="0.9.2",
+    version="0.9.3",
     description="Advanced Vision-Language Model Engine for content tagging",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
