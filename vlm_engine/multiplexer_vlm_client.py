@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 import warnings
 import time
 import json
@@ -112,11 +113,12 @@ class MultiplexerVLMClient(BaseVLMClient):
                 )
                 
                 # Create AsyncOpenAI client with optimized HTTP client
+                # max_retries=0 lets multiplexer-llm handle failover immediately
                 client = AsyncOpenAI(
                     api_key=endpoint_config.get("api_key", "dummy_api_key"),
                     base_url=endpoint_config["base_url"],
                     http_client=http_client,
-                    max_retries=2,
+                    max_retries=0,  # Let multiplexer-llm handle failover immediately
                     timeout=self.request_timeout
                 )
                 
@@ -202,78 +204,103 @@ class MultiplexerVLMClient(BaseVLMClient):
                 }
             ]
             
-            try:
-                # Use multiplexer for the request with proper exception handling
-                completion = await self.multiplexer.chat.completions.create(
-                    model=self.model_id,
-                    messages=messages,
-                    max_tokens=self.max_new_tokens,
-                    temperature=0.8,
-                    timeout=self.request_timeout
-                )
-                
-                if completion.choices and completion.choices[0].message:
-                    raw_reply = completion.choices[0].message.content or ""
+            # Implement exponential backoff with jitter for transient errors
+            # Note: multiplexer-llm handles per-endpoint failover internally (tries all endpoints)
+            # These errors are only raised when ALL endpoints (primary + fallback) are exhausted
+            # We backoff here to give the cluster time to recover before retrying
+            # Aggressive retry: 50 attempts, 1m → 2m → 4m → 8m → 16m max per attempt (~13 hours total)
+            max_attempts = 50  # Many more attempts for resilience
+            base_delay = 60  # Start at 1 minute
+            max_delay = 960  # 16 minutes max per attempt
+            
+            for attempt in range(max_attempts):
+                try:
+                    # Use multiplexer for the request with proper exception handling
+                    completion = await self.multiplexer.chat.completions.create(
+                        model=self.model_id,
+                        messages=messages,
+                        max_tokens=self.max_new_tokens,
+                        temperature=0.8,
+                        timeout=self.request_timeout
+                    )
                     
-                    # Log warning if response is empty (model generated no content)
-                    if not raw_reply or not raw_reply.strip():
-                        finish_reason: Optional[str] = getattr(completion.choices[0], "finish_reason", None)
-                        usage: Optional[Any] = getattr(completion, "usage", None)
-                        completion_tokens: int = 0
-                        if usage:
-                            completion_tokens = getattr(usage, "completion_tokens", 0)
-                        self.logger.warning(
-                            f"Received empty response from multiplexer. "
-                            f"Finish reason: {finish_reason}, "
-                            f"Completion tokens: {completion_tokens}. "
-                            f"This may indicate content filtering, model refusal, or generation issues."
-                        )
-                    else:
-                        self.logger.debug(f"Received response from multiplexer: {raw_reply[:100]}...")
-                    
-                    self.concurrency_active_count -= 1
+                    if completion.choices and completion.choices[0].message:
+                        raw_reply = completion.choices[0].message.content or ""
+                        
+                        # Log warning if response is empty (model generated no content)
+                        if not raw_reply or not raw_reply.strip():
+                            finish_reason: Optional[str] = getattr(completion.choices[0], "finish_reason", None)
+                            usage: Optional[Any] = getattr(completion, "usage", None)
+                            completion_tokens: int = 0
+                            if usage:
+                                completion_tokens = getattr(usage, "completion_tokens", 0)
+                            self.logger.warning(
+                                f"Received empty response from multiplexer. "
+                                f"Finish reason: {finish_reason}, "
+                                f"Completion tokens: {completion_tokens}. "
+                                f"This may indicate content filtering, model refusal, or generation issues."
+                            )
+                        else:
+                            self.logger.debug(f"Received response from multiplexer: {raw_reply[:100]}...")
+                        
+                        self.concurrency_active_count -= 1
 
-                    return self._parse_simple_default(raw_reply)
-                else:
-                    self.logger.error(f"Unexpected response structure from multiplexer: {completion}")
+                        return self._parse_simple_default(raw_reply)
+                    else:
+                        self.logger.error(f"Unexpected response structure from multiplexer: {completion}")
+                        self.concurrency_active_count -= 1
+                        return {tag: 0.0 for tag in self.tag_list}
+                        
+                except (RateLimitError, ModelSelectionError, ServiceUnavailableError) as e:
+                    if attempt == max_attempts - 1:
+                        # Final attempt failed - raise exception (hard failure, not silent)
+                        error_type = type(e).__name__
+                        endpoint = getattr(e, 'endpoint', 'unknown')
+                        retry_after = getattr(e, 'retry_after', None)
+                        self.logger.error(
+                            f"{error_type} at endpoint {endpoint} persisted after {max_attempts} attempts "
+                            f"({max_attempts * max_delay / 60:.0f} minutes total). Giving up: {e.message}"
+                        )
+                        self.concurrency_active_count -= 1
+                        raise  # Re-raise the exception - caller must handle this
+                    
+                    # Calculate wait time with exponential backoff and jitter
+                    retry_after = getattr(e, 'retry_after', None)
+                    if retry_after:
+                        wait_time = min(retry_after, max_delay)
+                    else:
+                        wait_time = min(base_delay * (2 ** attempt), max_delay)
+                    
+                    # Add jitter: 0% to 50% additional wait time
+                    wait_time *= (1 + random.random() * 0.5)
+                    
+                    error_type = type(e).__name__
+                    endpoint = getattr(e, 'endpoint', 'unknown')
+                    self.logger.warning(
+                        f"{error_type} at endpoint {endpoint}. "
+                        f"Waiting {wait_time/60:.1f}m (attempt {attempt + 1}/{max_attempts})..."
+                    )
+                    await asyncio.sleep(wait_time)
+                    
+                except ModelNotFoundError as e:
+                    self.logger.error(f"Model not found at endpoint {e.endpoint}: {e.message}")
                     self.concurrency_active_count -= 1
                     return {tag: 0.0 for tag in self.tag_list}
                     
-            except ModelNotFoundError as e:
-                self.logger.error(f"Model not found at endpoint {e.endpoint}: {e.message}")
-                self.concurrency_active_count -= 1
-                return {tag: 0.0 for tag in self.tag_list}
-                
-            except AuthenticationError as e:
-                self.logger.error(f"Authentication failed at endpoint {e.endpoint}: {e.message}")
-                self.concurrency_active_count -= 1
-                return {tag: 0.0 for tag in self.tag_list}
-                
-            except RateLimitError as e:
-                self.logger.warning(f"Rate limit hit at endpoint {e.endpoint}, retry after {e.retry_after}s: {e.message}")
-                self.concurrency_active_count -= 1
-                return {tag: 0.0 for tag in self.tag_list}
-                
-            except ServiceUnavailableError as e:
-                self.logger.error(f"Service unavailable at endpoint {e.endpoint}: {e.message}")
-                self.concurrency_active_count -= 1
-                return {tag: 0.0 for tag in self.tag_list}
-                
-            except ModelSelectionError as e:
-                self.logger.error(f"No models available for selection: {e.message}")
-                self.concurrency_active_count -= 1
-                return {tag: 0.0 for tag in self.tag_list}
-                
-            except MultiplexerError as e:
-                self.logger.error(f"Multiplexer error: {e.message}")
-                self.concurrency_active_count -= 1
-                return {tag: 0.0 for tag in self.tag_list}
-                
-            except Exception as e:
-                self.logger.error(f"Unexpected error during frame analysis: {e}", exc_info=True)
-                self.concurrency_active_count -= 1
-
-                return {tag: 0.0 for tag in self.tag_list}
+                except AuthenticationError as e:
+                    self.logger.error(f"Authentication failed at endpoint {e.endpoint}: {e.message}")
+                    self.concurrency_active_count -= 1
+                    return {tag: 0.0 for tag in self.tag_list}
+                    
+                except MultiplexerError as e:
+                    self.logger.error(f"Multiplexer error: {e.message}")
+                    self.concurrency_active_count -= 1
+                    return {tag: 0.0 for tag in self.tag_list}
+                    
+                except Exception as e:
+                    self.logger.error(f"Unexpected error during frame analysis: {e}", exc_info=True)
+                    self.concurrency_active_count -= 1
+                    return {tag: 0.0 for tag in self.tag_list}
     
     async def __aenter__(self):
         """Async context manager entry."""
