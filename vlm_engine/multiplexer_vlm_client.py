@@ -208,10 +208,10 @@ class MultiplexerVLMClient(BaseVLMClient):
             # Note: multiplexer-llm handles per-endpoint failover internally (tries all endpoints)
             # These errors are only raised when ALL endpoints (primary + fallback) are exhausted
             # We backoff here to give the cluster time to recover before retrying
-            # Aggressive retry: 50 attempts, 1m → 2m → 4m → 8m → 16m max per attempt (~13 hours total)
-            max_attempts = 50  # Many more attempts for resilience
-            base_delay = 60  # Start at 1 minute
-            max_delay = 960  # 16 minutes max per attempt
+            max_attempts = 500  # Many more attempts for resilience
+            base_delay = 30  # Start at 30 seconds
+            max_delay = 120  # 2 minute max per attempt
+            backoff_factor = 1.2
             
             for attempt in range(max_attempts):
                 try:
@@ -269,7 +269,7 @@ class MultiplexerVLMClient(BaseVLMClient):
                     if retry_after:
                         wait_time = min(retry_after, max_delay)
                     else:
-                        wait_time = min(base_delay * (2 ** attempt), max_delay)
+                        wait_time = min(base_delay * (backoff_factor ** attempt), max_delay)
                     
                     # Add jitter: 0% to 50% additional wait time
                     wait_time *= (1 + random.random() * 0.5)
