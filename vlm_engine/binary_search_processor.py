@@ -215,7 +215,7 @@ class BinarySearchProcessor:
             return self._vlm_coordinator
 
         try:
-            pipeline = item_future.get("pipeline")
+            pipeline = item_future["pipeline"] if "pipeline" in item_future else None
             if pipeline:
                 coordinator = IntegratedVLMCoordinator(pipeline.models)
                 if coordinator.vlm_client is not None:
