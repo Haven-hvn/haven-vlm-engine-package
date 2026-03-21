@@ -224,27 +224,27 @@ class PipelineManager:
         return itemFuture
 
     def get_performance_stats(self) -> Dict[str, Any]:
-    """Get performance statistics from the integrated VLM coordinator."""
-    for pipeline in self.pipelines.values():
-        for model_wrapper in pipeline.models:
-            model = model_wrapper.model
-            # Check for get_performance_stats on the outer model (ModelProcessor)
-            if hasattr(model, "get_performance_stats"):
-                stats = model.get_performance_stats()
-                if stats:
-                    return stats
-            # Check inner model (BinarySearchProcessor, VLMAIModel, etc.)
-            if hasattr(model, "model"):
-                inner_model = model.model
-                # BinarySearchProcessor with cached VLM coordinator
-                if hasattr(inner_model, "_vlm_coordinator") and inner_model._vlm_coordinator:
-                    return inner_model._vlm_coordinator.get_performance_stats()
-                # VLMAIModel with vlm_model
-                if hasattr(inner_model, "vlm_model"):
-                    vlm_model = inner_model.vlm_model
-                    if vlm_model and hasattr(vlm_model, "get_performance_stats"):
-                        return vlm_model.get_performance_stats()
-                # VideoPreprocessorModel with batch_coordinator
-                if hasattr(inner_model, "batch_coordinator") and inner_model.batch_coordinator:
-                    return inner_model.batch_coordinator.get_performance_stats()
-    return {}
+        """Get performance statistics from the integrated VLM coordinator."""
+        for pipeline in self.pipelines.values():
+            for model_wrapper in pipeline.models:
+                model = model_wrapper.model
+                # Check for get_performance_stats on the outer model (ModelProcessor)
+                if hasattr(model, "get_performance_stats"):
+                    stats = model.get_performance_stats()
+                    if stats:
+                        return stats
+                # Check inner model (BinarySearchProcessor, VLMAIModel, etc.)
+                if hasattr(model, "model"):
+                    inner_model = model.model
+                    # BinarySearchProcessor with cached VLM coordinator
+                    if hasattr(inner_model, "_vlm_coordinator") and inner_model._vlm_coordinator:
+                        return inner_model._vlm_coordinator.get_performance_stats()
+                    # VLMAIModel with vlm_model
+                    if hasattr(inner_model, "vlm_model"):
+                        vlm_model = inner_model.vlm_model
+                        if vlm_model and hasattr(vlm_model, "get_performance_stats"):
+                            return vlm_model.get_performance_stats()
+                    # VideoPreprocessorModel with batch_coordinator
+                    if hasattr(inner_model, "batch_coordinator") and inner_model.batch_coordinator:
+                        return inner_model.batch_coordinator.get_performance_stats()
+        return {}
