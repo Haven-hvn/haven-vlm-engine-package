@@ -6,6 +6,7 @@ Handles both OpenAI and Multiplexer VLM clients with intelligent batching.
 
 import asyncio
 import logging
+import time
 from typing import Dict, List, Optional, Any, Union
 from PIL import Image
 from .vlm_client import OpenAICompatibleVLMClient
@@ -26,6 +27,10 @@ class VLMBatchCoordinator:
         self.logger = logging.getLogger("logger")
         self.total_calls = 0
 
+        # Frame tracking
+        self.total_frames_processed = 0
+        self.start_time: Optional[float] = None
+
         # Performance tracking
         self.batch_sizes = []
         self.response_times = []
@@ -40,15 +45,16 @@ class VLMBatchCoordinator:
         Analyze a single frame using the VLM client.
         This is the main interface used by the binary search engine.
         """
-        import time
+        if self.start_time is None:
+            self.start_time = time.time()
 
         start_time = time.time()
 
         try:
             result = await self.vlm_client.analyze_frame(frame)
             self.total_calls += 1
+            self.total_frames_processed += 1
 
-            # Track performance
             response_time = time.time() - start_time
             self.response_times.append(response_time)
             self.last_response_time = response_time
@@ -60,7 +66,6 @@ class VLMBatchCoordinator:
 
         except Exception as e:
             self.logger.error(f"VLM analysis failed: {e}", exc_info=True)
-            # Return zero confidence for all tags on failure
             if hasattr(self.vlm_client, "tag_list"):
                 return {tag: 0.0 for tag in self.vlm_client.tag_list}
             else:
@@ -102,15 +107,23 @@ class VLMBatchCoordinator:
 
     def get_performance_stats(self) -> Dict[str, Any]:
         """Get performance statistics for monitoring"""
+        elapsed = 0.0
+        if self.start_time:
+            elapsed = time.time() - self.start_time
+
         if not self.response_times:
             return {
                 "total_calls": self.total_calls,
+                "total_frames_processed": self.total_frames_processed,
+                "elapsed_time": elapsed,
                 "avg_response_time": 0.0,
                 "avg_batch_size": 0.0,
             }
 
         return {
             "total_calls": self.total_calls,
+            "total_frames_processed": self.total_frames_processed,
+            "elapsed_time": elapsed,
             "avg_response_time": sum(self.response_times) / len(self.response_times),
             "avg_batch_size": sum(self.batch_sizes) / len(self.batch_sizes)
             if self.batch_sizes
