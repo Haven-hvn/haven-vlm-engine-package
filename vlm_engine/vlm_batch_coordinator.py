@@ -228,6 +228,12 @@ class IntegratedVLMCoordinator:
             return self.vlm_client.vlm_detected_tag_confidence
         return 0.5  # Default threshold
 
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """Get performance statistics from the batch coordinator."""
+        if self.batch_coordinator:
+            return self.batch_coordinator.get_performance_stats()
+        return {}
+
 
 class MockVLMCoordinator:
     """

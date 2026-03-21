@@ -227,8 +227,11 @@ class PipelineManager:
         """Get performance statistics from the integrated VLM coordinator."""
         for pipeline in self.pipelines.values():
             for model_wrapper in pipeline.models:
-                if hasattr(model_wrapper.model, "model"):
-                    inner_model = model_wrapper.model.model
+                model = model_wrapper.model
+                if hasattr(model, "get_performance_stats"):
+                    return model.get_performance_stats()
+                if hasattr(model, "model"):
+                    inner_model = model.model
                     if hasattr(inner_model, "vlm_model"):
                         vlm_model = inner_model.vlm_model
                         if vlm_model and hasattr(vlm_model, "get_performance_stats"):
