@@ -19,7 +19,7 @@ def test_torch_imports():
     try:
         import torch
         import torchvision
-        from torchvision.io import read_image, VideoReader
+        from torchvision.io import read_image
         logger.info(f"  ✓ torch version: {torch.__version__}")
         logger.info(f"  ✓ torchvision version: {torchvision.__version__}")
         return True

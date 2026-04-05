@@ -13,21 +13,16 @@ It focuses on testing the integration logic and configuration handling.
 """
 
 import asyncio
-import sys
 import os
+import sys
 from typing import Dict, Any, List
 from PIL import Image
 import numpy as np
 
-# Add the current directory to the path
-sys.path.insert(0, '.')
-
-# Import required modules
 from multiplexer_llm import Multiplexer
 from openai import AsyncOpenAI
 
-# Import our custom client
-exec(open('vlm_engine/multiplexer_vlm_client.py').read())
+from vlm_engine.multiplexer_vlm_client import MultiplexerVLMClient
 
 def create_test_image() -> Image.Image:
     """Create a simple test image for testing."""
@@ -35,7 +30,7 @@ def create_test_image() -> Image.Image:
     array = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
     return Image.fromarray(array)
 
-async def test_multiplexer_client_initialization():
+async def run_multiplexer_client_initialization():
     """Test MultiplexerVLMClient initialization with various configurations."""
     print("🧪 Testing MultiplexerVLMClient initialization...")
     
@@ -106,7 +101,7 @@ async def test_multiplexer_client_initialization():
     
     return True
 
-async def test_image_processing():
+async def run_image_processing():
     """Test image processing functionality."""
     print("🧪 Testing image processing...")
     
@@ -151,7 +146,7 @@ async def test_image_processing():
     
     return True
 
-async def test_configuration_validation():
+async def run_configuration_validation():
     """Test various configuration scenarios."""
     print("🧪 Testing configuration validation...")
     
@@ -192,7 +187,7 @@ async def test_configuration_validation():
     
     return True
 
-async def test_backward_compatibility():
+async def run_backward_compatibility():
     """Test that the integration maintains backward compatibility."""
     print("🧪 Testing backward compatibility...")
     
@@ -210,10 +205,10 @@ async def main():
     print("=" * 60)
     
     tests = [
-        ("MultiplexerVLMClient Initialization", test_multiplexer_client_initialization),
-        ("Image Processing", test_image_processing),
-        ("Configuration Validation", test_configuration_validation),
-        ("Backward Compatibility", test_backward_compatibility),
+        ("MultiplexerVLMClient Initialization", run_multiplexer_client_initialization),
+        ("Image Processing", run_image_processing),
+        ("Configuration Validation", run_configuration_validation),
+        ("Backward Compatibility", run_backward_compatibility),
     ]
     
     passed = 0

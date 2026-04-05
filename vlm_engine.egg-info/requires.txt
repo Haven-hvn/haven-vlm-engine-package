@@ -8,3 +8,13 @@ opencv-python
 decord
 requests
 multiplexer-llm==0.2.3
+
+[dev]
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+mypy>=1.0.0
+
+[gpu]
+torch>=2.0.0
+torchvision>=0.15.0

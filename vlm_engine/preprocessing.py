@@ -1,8 +1,6 @@
 import sys
 import platform
 import torch
-from torchvision.io import read_image, VideoReader
-import torchvision
 from typing import List, Tuple, Dict, Any, Optional, Union, Iterator
 import logging
 import threading

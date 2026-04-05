@@ -25,7 +25,7 @@ def create_dummy_video(path: str, duration: int = 5):
         f.write(dummy_mp4_data)
     print(f"Created dummy video: {path}")
 
-async def test_parallel_processing():
+async def run_parallel_processing():
     """Test parallel video processing"""
     print("🧪 Testing Parallel Video Processing")
     print("=" * 50)
@@ -212,4 +212,4 @@ async def test_parallel_processing():
             print(f"   Video {i+1}: {relative_start:.2f}s - {relative_end:.2f}s (duration: {duration:.2f}s)")
 
 if __name__ == "__main__":
-    asyncio.run(test_parallel_processing())
+    asyncio.run(run_parallel_processing())

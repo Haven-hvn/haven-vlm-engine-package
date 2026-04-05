@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: vlm_engine
-Version: 1.0.0
+Version: 1.0.1
 Summary: Advanced Vision-Language Model Engine for content tagging
 Home-page: https://github.com/Haven-hvn/haven-vlm-engine-package
 Author: HAVEN Network
@@ -24,12 +24,21 @@ Requires-Dist: opencv-python
 Requires-Dist: decord
 Requires-Dist: requests
 Requires-Dist: multiplexer-llm==0.2.3
+Provides-Extra: gpu
+Requires-Dist: torch>=2.0.0; extra == "gpu"
+Requires-Dist: torchvision>=0.15.0; extra == "gpu"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: mypy>=1.0.0; extra == "dev"
 Dynamic: author
 Dynamic: author-email
 Dynamic: classifier
 Dynamic: description
 Dynamic: description-content-type
 Dynamic: home-page
+Dynamic: provides-extra
 Dynamic: requires-dist
 Dynamic: requires-python
 Dynamic: summary
@@ -49,21 +58,16 @@ A high-performance Python package for Vision-Language Model (VLM) based content 
 
 ## Installation
 
-### From PyPI (when published)
-```bash
-pip install vlm-engine
-```
-
 ### From Source
+
 ```bash
 git clone https://github.com/Haven-hvn/haven-vlm-engine-package.git
-cd vlm-engine-package
+cd haven-vlm-engine-package
 pip install -e .
 ```
 
 ### Requirements
 - Python 3.8+
-- **Sufficient RAM**: Video preprocessing loads entire videos into memory (not GPU memory)
 - Compatible VLM server endpoint:
   - Remote OpenAI-compatible API (recommended)
   - Local server using [LM Studio](https://lmstudio.ai/)
@@ -244,7 +248,7 @@ class VLMEngine:
 ## Performance Optimization
 
 ### Memory Requirements
-- **Important**: Video preprocessing loads the entire video into system RAM (not GPU memory)
+- Video preprocessing loads the entire video into system RAM
 - Ensure sufficient RAM for your video sizes (e.g., a 1GB video may require 4-8GB of available RAM)
 - Consider processing videos in segments for very large files
 
@@ -297,14 +301,8 @@ custom_pipeline = PipelineConfig(
    - Check the `api_base_url` configuration
    - Verify firewall settings
 
-2. **GPU Memory Errors**
-   - Reduce batch size or frame interval
-   - Ensure proper CUDA installation
-   - Check GPU memory availability
-
-3. **Slow Processing**
+2. **Slow Processing**
    - Increase frame interval for faster processing
-   - Use GPU acceleration if available
    - Optimize VLM server settings
 
 ### Logging
