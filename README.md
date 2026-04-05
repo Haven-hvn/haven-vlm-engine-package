@@ -5,6 +5,7 @@ A high-performance Python package for Vision-Language Model (VLM) based content 
 ## Features
 
 - **Remote VLM Integration**: Connects to any OpenAI-compatible VLM endpoint (no local model loading required)
+- **Modest local footprint**: Inference runs on your VLM server, not on this machine—no multi‑GB model weights or local GPU VRAM for the vision model. Video is decoded in a streaming, frame-by-frame way (PyAV / decord), so RAM stays bounded by active frames and caches rather than the whole file. Works well on **CPU-only** and low-spec laptops when paired with a remote endpoint.
 - **Context-Aware Detection**: Leverages Vision-Language Models' understanding of visual relationships for accurate content tagging
 - **Flexible Architecture**: Modular pipeline system with configurable models and processing stages
 - **Asynchronous Processing**: Built on asyncio for efficient video and image processing
@@ -202,10 +203,12 @@ class VLMEngine:
 
 ## Performance Optimization
 
+The VLM runs on the **server** you configure; locally you mostly pay for decode, resizing, and API I/O. If CUDA is present, frame tensors may use the GPU; otherwise preprocessing uses the CPU.
+
 ### Memory Requirements
-- Video preprocessing loads the entire video into system RAM
-- Ensure sufficient RAM for your video sizes (e.g., a 1GB video may require 4-8GB of available RAM)
-- Consider processing videos in segments for very large files
+- Video preprocessing **does not** load the full decoded video into RAM. PyAV (macOS ARM) decodes sequentially; elsewhere **decord** reads and decodes frames on demand from disk.
+- Working set is dominated by **currently decoded frames** (plus small decoder/caches inside FFmpeg/decord), tensors passed to the VLM, and optional frame caching (e.g. the frame extractor keeps a small bounded cache).
+- Very high resolution or many parallel workers can still increase RAM and CPU; for huge files, tune `frame_interval` or concurrency rather than assuming linear growth with file size on disk.
 
 ### API Optimization
 - Configure retry settings based on your VLM server's capacity
