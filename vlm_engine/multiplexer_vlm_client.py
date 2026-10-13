@@ -6,7 +6,7 @@ import time
 import json
 from typing import Dict, Any, Optional, List
 from PIL import Image
-import httpx
+import httpx2
 from multiplexer_llm import (
     Multiplexer,
     MultiplexerError,
@@ -25,7 +25,7 @@ class MultiplexerVLMClient(BaseVLMClient):
     High-performance VLM client that uses multiplexer-llm for load balancing across multiple OpenAI-compatible endpoints.
 
     NEW ARCHITECTURE:
-    - Concurrency control has moved from network layer (httpx limits) to application layer (native slot reservation)
+    - Concurrency control has moved from network layer (httpx2 limits) to application layer (native slot reservation)
     - Intelligent overflow routing, immediate self-healing rebalancing, and weighted distribution preservation under load
     - The Global Semaphore (self.semaphore) remains the primary guard against system-wide overload
     - Per-endpoint concurrency limits are now configured via max_concurrent parameter
@@ -123,7 +123,7 @@ class MultiplexerVLMClient(BaseVLMClient):
         await self.multiplexer.__aenter__()
 
         # Add endpoints to multiplexer with per-endpoint concurrency control
-        # Move httpx limits calculation inside endpoint loop for per-node optimization
+        # Move httpx2 limits calculation inside endpoint loop for per-node optimization
         for i, endpoint_config in enumerate(self.multiplexer_endpoints):
             try:
                 self._register_endpoint(self.multiplexer, endpoint_config, i)
@@ -152,15 +152,15 @@ class MultiplexerVLMClient(BaseVLMClient):
             "max_concurrent", 3
         )  # Default to 3 for pipelining
         limit_buffer = 5  # Small safety buffer since per-node limits
-        per_node_limits = httpx.Limits(
+        per_node_limits = httpx2.Limits(
             max_keepalive_connections=per_node_max_concurrent + limit_buffer,
             max_connections=(per_node_max_concurrent * 2) + limit_buffer,
             keepalive_expiry=30.0,
         )
 
         # Create HTTP client with per-node connection limits
-        http_client: httpx.AsyncClient = httpx.AsyncClient(
-            timeout=httpx.Timeout(self.request_timeout),
+        http_client: httpx2.AsyncClient = httpx2.AsyncClient(
+            timeout=httpx2.Timeout(self.request_timeout),
             limits=per_node_limits,  # Per-node limits instead of global hardcoded values
         )
 

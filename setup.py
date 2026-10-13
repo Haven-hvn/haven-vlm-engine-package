@@ -26,7 +26,9 @@ setup(
         "opencv-python",
         "decord",
         "requests",
-        "multiplexer-llm==0.3.0"
+        "multiplexer-llm==0.4.0",
+        "openai==3.29.0",
+        "httpx2==2.13.1"
     ],
     extras_require={
         # GPU support - installs CUDA-enabled PyTorch
@@ -48,9 +50,11 @@ setup(
         "Intended Audience :: Developers",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.10",
 )

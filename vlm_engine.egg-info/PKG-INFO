@@ -9,10 +9,12 @@ Classifier: Development Status :: 3 - Alpha
 Classifier: Intended Audience :: Developers
 Classifier: License :: OSI Approved :: MIT License
 Classifier: Programming Language :: Python :: 3
-Classifier: Programming Language :: Python :: 3.8
-Classifier: Programming Language :: Python :: 3.9
 Classifier: Programming Language :: Python :: 3.10
-Requires-Python: >=3.8
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Programming Language :: Python :: 3.14
+Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 Requires-Dist: pydantic
 Requires-Dist: numpy
@@ -23,7 +25,9 @@ Requires-Dist: pyyaml
 Requires-Dist: opencv-python
 Requires-Dist: decord
 Requires-Dist: requests
-Requires-Dist: multiplexer-llm==0.3.0
+Requires-Dist: multiplexer-llm==0.4.0
+Requires-Dist: openai==3.29.0
+Requires-Dist: httpx2==2.13.1
 Provides-Extra: gpu
 Requires-Dist: torch>=2.0.0; extra == "gpu"
 Requires-Dist: torchvision>=0.15.0; extra == "gpu"
@@ -67,7 +71,7 @@ pip install -e .
 ```
 
 ### Requirements
-- Python 3.8+
+- Python 3.10+
 - Compatible VLM server endpoint:
   - Remote OpenAI-compatible API (recommended)
   - Local server using [LM Studio](https://lmstudio.ai/)

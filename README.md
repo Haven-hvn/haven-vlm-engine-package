@@ -23,7 +23,7 @@ pip install -e .
 ```
 
 ### Requirements
-- Python 3.8+
+- Python 3.10+
 - Compatible VLM server endpoint:
   - Remote OpenAI-compatible API (recommended)
   - Local server using [LM Studio](https://lmstudio.ai/)
