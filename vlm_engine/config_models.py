@@ -28,6 +28,10 @@ class ModelConfig(BaseModel):
     # Multiplexer configuration for multiple endpoints
     multiplexer_endpoints: Optional[List[Dict[str, Any]]] = None
     use_multiplexer: bool = False
+    # System One (Jev /v1/systemone) configuration - a dedicated endpoint pool.
+    # Jev endpoints only speak /v1/systemone (not /chat/completions), so they
+    # get their own multiplexer instead of joining the VLM endpoint pool.
+    systemone_endpoints: Optional[List[Dict[str, Any]]] = None
 
 class PipelineModelConfig(BaseModel):
     name: str

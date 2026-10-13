@@ -8,7 +8,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="vlm_engine",
-    version="1.0.1",
+    version="1.1.0",
     description="Advanced Vision-Language Model Engine for content tagging",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -26,7 +26,7 @@ setup(
         "opencv-python",
         "decord",
         "requests",
-        "multiplexer-llm==0.2.3"
+        "multiplexer-llm==0.3.0"
     ],
     extras_require={
         # GPU support - installs CUDA-enabled PyTorch

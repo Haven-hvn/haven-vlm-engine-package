@@ -7,7 +7,7 @@ pyyaml
 opencv-python
 decord
 requests
-multiplexer-llm==0.2.3
+multiplexer-llm==0.3.0
 
 [dev]
 pytest>=7.0.0

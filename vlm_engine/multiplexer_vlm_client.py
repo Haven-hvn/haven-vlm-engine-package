@@ -65,12 +65,24 @@ class MultiplexerVLMClient(BaseVLMClient):
                 "Configuration must provide 'multiplexer_endpoints' for multiplexer mode."
             )
 
+        # Extract optional System One (Jev /v1/systemone) endpoints.
+        # Jev endpoints only speak /v1/systemone, so they are routed through a
+        # dedicated multiplexer pool instead of joining the chat/VLM pool above.
+        self.systemone_endpoints: List[Dict[str, Any]] = config.get(
+            "systemone_endpoints", []
+        )
+
         # Initialize concurrency control
         self.semaphore = asyncio.Semaphore(
             self.max_concurrent_requests
         )  # Global admission control
         self.multiplexer: Optional[Multiplexer] = None
         self._initialized = False
+
+        # System One (Jev /v1/systemone) pool - dedicated multiplexer, lazily
+        # initialized so chat-only configurations never pay for it
+        self.systemone_multiplexer: Optional[Multiplexer] = None
+        self._systemone_initialized = False
 
         # Debug instrumentation for hypothesis B (connection pool exhaustion)
         self.client_requests_count = 0
@@ -81,6 +93,12 @@ class MultiplexerVLMClient(BaseVLMClient):
             f"with {len(self.tag_list)} tags, {len(self.multiplexer_endpoints)} endpoints, "
             f"global_max_concurrent: {self.max_concurrent_requests}"
         )
+
+        if self.systemone_endpoints:
+            self.logger.info(
+                f"System One (Jev /v1/systemone) pool configured with {len(self.systemone_endpoints)} endpoints "
+                f"(kept separate from the chat/VLM endpoint pool)"
+            )
 
     async def _ensure_initialized(self):
         """Ensure the multiplexer is initialized. Called before each request.
@@ -108,54 +126,7 @@ class MultiplexerVLMClient(BaseVLMClient):
         # Move httpx limits calculation inside endpoint loop for per-node optimization
         for i, endpoint_config in enumerate(self.multiplexer_endpoints):
             try:
-                # Calculate per-endpoint connection limits based on that specific node's capacity
-                # Use per-endpoint max_concurrent for sizing, with reasonable default for pipelining
-                per_node_max_concurrent = endpoint_config.get(
-                    "max_concurrent", 3
-                )  # Default to 3 for pipelining
-                limit_buffer = 5  # Small safety buffer since per-node limits
-                per_node_limits = httpx.Limits(
-                    max_keepalive_connections=per_node_max_concurrent + limit_buffer,
-                    max_connections=(per_node_max_concurrent * 2) + limit_buffer,
-                    keepalive_expiry=30.0,
-                )
-
-                # Create HTTP client with per-node connection limits
-                http_client: httpx.AsyncClient = httpx.AsyncClient(
-                    timeout=httpx.Timeout(self.request_timeout),
-                    limits=per_node_limits,  # Per-node limits instead of global hardcoded values
-                )
-
-                # Create AsyncOpenAI client with optimized HTTP client
-                # max_retries=0 lets multiplexer-llm handle failover immediately
-                client = AsyncOpenAI(
-                    api_key=endpoint_config.get("api_key", "dummy_api_key"),
-                    base_url=endpoint_config["base_url"],
-                    http_client=http_client,
-                    max_retries=0,  # Let multiplexer-llm handle failover immediately
-                    timeout=self.request_timeout,
-                )
-
-                weight = endpoint_config.get("weight", 1)
-                name = endpoint_config.get("name", f"endpoint-{i}")
-                is_fallback = endpoint_config.get("is_fallback", False)
-                # NEW: Extract max_concurrent from endpoint config (defaults to None for unlimited)
-                max_concurrent = endpoint_config.get("max_concurrent")
-
-                if is_fallback:
-                    self.multiplexer.add_fallback_model(
-                        client, weight, name, max_concurrent=max_concurrent
-                    )
-                    self.logger.info(
-                        f"Added fallback endpoint: {name} (weight: {weight}, max_concurrent: {max_concurrent or 'unlimited'})"
-                    )
-                else:
-                    self.multiplexer.add_model(
-                        client, weight, name, max_concurrent=max_concurrent
-                    )
-                    self.logger.info(
-                        f"Added primary endpoint: {name} (weight: {weight}, max_concurrent: {max_concurrent or 'unlimited'})"
-                    )
+                self._register_endpoint(self.multiplexer, endpoint_config, i)
             except Exception as e:
                 self.logger.error(f"Failed to add endpoint {endpoint_config}: {e}")
                 raise
@@ -164,6 +135,65 @@ class MultiplexerVLMClient(BaseVLMClient):
         self.logger.info(
             f"Multiplexer initialization completed with {len(self.multiplexer_endpoints)} endpoints and application-layer concurrency control"
         )
+
+    def _register_endpoint(
+        self, multiplexer: Multiplexer, endpoint_config: Dict[str, Any], index: int
+    ) -> None:
+        """Register a single endpoint with a multiplexer pool.
+
+        Shared by both pools. Each pool is homogeneous by construction: the chat
+        pool (multiplexer_endpoints) only ever serves chat.completions.create and
+        the System One pool (systemone_endpoints) only ever serves systemone.create,
+        so the two endpoint types are never mixed within one pool.
+        """
+        # Calculate per-endpoint connection limits based on that specific node's capacity
+        # Use per-endpoint max_concurrent for sizing, with reasonable default for pipelining
+        per_node_max_concurrent = endpoint_config.get(
+            "max_concurrent", 3
+        )  # Default to 3 for pipelining
+        limit_buffer = 5  # Small safety buffer since per-node limits
+        per_node_limits = httpx.Limits(
+            max_keepalive_connections=per_node_max_concurrent + limit_buffer,
+            max_connections=(per_node_max_concurrent * 2) + limit_buffer,
+            keepalive_expiry=30.0,
+        )
+
+        # Create HTTP client with per-node connection limits
+        http_client: httpx.AsyncClient = httpx.AsyncClient(
+            timeout=httpx.Timeout(self.request_timeout),
+            limits=per_node_limits,  # Per-node limits instead of global hardcoded values
+        )
+
+        # Create AsyncOpenAI client with optimized HTTP client
+        # max_retries=0 lets multiplexer-llm handle failover immediately
+        client = AsyncOpenAI(
+            api_key=endpoint_config.get("api_key", "dummy_api_key"),
+            base_url=endpoint_config["base_url"],
+            http_client=http_client,
+            max_retries=0,  # Let multiplexer-llm handle failover immediately
+            timeout=self.request_timeout,
+        )
+
+        weight = endpoint_config.get("weight", 1)
+        name = endpoint_config.get("name", f"endpoint-{index}")
+        is_fallback = endpoint_config.get("is_fallback", False)
+        # NEW: Extract max_concurrent from endpoint config (defaults to None for unlimited)
+        max_concurrent = endpoint_config.get("max_concurrent")
+
+        if is_fallback:
+            multiplexer.add_fallback_model(
+                client, weight, name, max_concurrent=max_concurrent
+            )
+            self.logger.info(
+                f"Added fallback endpoint: {name} (weight: {weight}, max_concurrent: {max_concurrent or 'unlimited'})"
+            )
+        else:
+            multiplexer.add_model(
+                client, weight, name, max_concurrent=max_concurrent
+            )
+            self.logger.info(
+                f"Added primary endpoint: {name} (weight: {weight}, max_concurrent: {max_concurrent or 'unlimited'})"
+            )
 
     async def _cleanup_multiplexer(self):
         """Cleanup multiplexer resources."""
@@ -176,6 +206,56 @@ class MultiplexerVLMClient(BaseVLMClient):
             finally:
                 self.multiplexer = None
                 self._initialized = False
+
+    async def _ensure_systemone_initialized(self):
+        """Ensure the System One multiplexer is initialized. Called before each query.
+
+        Idempotent - safe to call multiple times; only the first call initializes.
+        The pool is built lazily so clients without systemone_endpoints never
+        pay for the second multiplexer.
+        """
+        if not self._systemone_initialized:
+            await self._initialize_systemone_multiplexer()
+
+    async def _initialize_systemone_multiplexer(self):
+        """Initialize the dedicated System One (Jev /v1/systemone) endpoint pool."""
+        if self._systemone_initialized:
+            return
+
+        self.logger.info(
+            f"Initializing System One multiplexer with {len(self.systemone_endpoints)} endpoints..."
+        )
+
+        # Create a SEPARATE multiplexer instance for the System One pool.
+        # Jev endpoints only speak /v1/systemone while VLM endpoints only speak
+        # /chat/completions, so each pool gets its own multiplexer and the two
+        # endpoint types are never mixed within one pool.
+        self.systemone_multiplexer = Multiplexer()
+        await self.systemone_multiplexer.__aenter__()
+
+        for i, endpoint_config in enumerate(self.systemone_endpoints):
+            try:
+                self._register_endpoint(self.systemone_multiplexer, endpoint_config, i)
+            except Exception as e:
+                self.logger.error(f"Failed to add System One endpoint {endpoint_config}: {e}")
+                raise
+
+        self._systemone_initialized = True
+        self.logger.info(
+            "System One multiplexer initialization completed with application-layer concurrency control"
+        )
+
+    async def _cleanup_systemone_multiplexer(self):
+        """Cleanup System One multiplexer resources."""
+        if self.systemone_multiplexer and self._systemone_initialized:
+            try:
+                await self.systemone_multiplexer.__aexit__(None, None, None)
+                self.logger.info("System One multiplexer cleanup completed")
+            except Exception as e:
+                self.logger.error(f"Error during System One multiplexer cleanup: {e}")
+            finally:
+                self.systemone_multiplexer = None
+                self._systemone_initialized = False
 
     async def analyze_frame(self, frame: Optional[Image.Image]) -> Dict[str, float]:
         """
@@ -334,6 +414,122 @@ class MultiplexerVLMClient(BaseVLMClient):
                     self.concurrency_active_count -= 1
                     return {tag: 0.0 for tag in self.tag_list}
 
+    async def ask_systemone(
+        self,
+        *,
+        state: Any,
+        questions: Dict[str, Any],
+        path: str = "/systemone",
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """
+        Ask atomic questions about a state via the Jev /v1/systemone contract.
+
+        Routed through the dedicated System One endpoint pool
+        (systemone_endpoints) with the same weighted selection, capacity
+        reservation, and automatic failover as chat completions. Unlike
+        analyze_frame, errors are raised rather than folded into
+        zero-confidence tags - the caller owns the fallback behavior for
+        decisions.
+
+        Args:
+            state: The subject being judged (plain text or structured JSON).
+            questions: Map of question id -> question body (noul/choice/score).
+                Ids are echoed in the response's answers.
+            path: Endpoint path. Defaults to "/systemone" and is merged onto
+                each client's base_url (which should include the /v1 prefix).
+            **kwargs: Additional request body fields (e.g. choice_head).
+
+        Returns:
+            The parsed response body as a dict (model, answers, usage).
+
+        Raises:
+            ValueError: No systemone_endpoints configured.
+            RateLimitError/ModelSelectionError/ServiceUnavailableError: All
+                endpoints exhausted after the full retry budget.
+            AuthenticationError/ModelNotFoundError/MultiplexerError: Pool
+                misconfigured or endpoint rejected the request.
+        """
+        if not self.systemone_endpoints:
+            raise ValueError(
+                "Configuration must provide 'systemone_endpoints' to ask System One questions."
+            )
+
+        # Use semaphore for GLOBAL admission control (system chokehold),
+        # shared with analyze_frame so the two surfaces cannot jointly
+        # overload the host process
+        async with self.semaphore:
+            self.client_requests_count += 1
+            self.concurrency_active_count += 1
+            try:
+                await self._ensure_systemone_initialized()
+
+                # Same resilience profile as analyze_frame: multiplexer-llm
+                # fails over across endpoints internally (429/529 -> 60s
+                # disable, 5xx -> 15s); these errors surface only when ALL
+                # endpoints (primary + fallback) are exhausted, so we back off
+                # to give the cluster time to recover before retrying
+                max_attempts = 500  # Many more attempts for resilience
+                base_delay = 30  # Start at 30 seconds
+                max_delay = 120  # 2 minute max per attempt
+                backoff_factor = 1.2
+
+                for attempt in range(max_attempts):
+                    try:
+                        # Use the dedicated System One multiplexer for the request
+                        return await self.systemone_multiplexer.systemone.create(
+                            state=state,
+                            questions=questions,
+                            path=path,
+                            **kwargs,
+                        )
+                    except (
+                        RateLimitError,
+                        ModelSelectionError,
+                        ServiceUnavailableError,
+                    ) as e:
+                        if attempt == max_attempts - 1:
+                            error_type = type(e).__name__
+                            self.logger.error(
+                                f"{error_type} persisted after {max_attempts} attempts "
+                                f"({max_attempts * max_delay / 60:.0f} minutes total). Giving up: {e.message}"
+                            )
+                            raise
+
+                        retry_after = getattr(e, "retry_after", None)
+                        if retry_after:
+                            wait_time = min(retry_after, max_delay)
+                        else:
+                            wait_time = min(
+                                base_delay * (backoff_factor**attempt), max_delay
+                            )
+
+                        wait_time *= 1 + random.random() * 0.5
+
+                        error_type = type(e).__name__
+                        self.logger.warning(
+                            f"{error_type} while asking System One questions. Waiting {wait_time / 60:.1f}m (attempt {attempt + 1}/{max_attempts})..."
+                        )
+                        await asyncio.sleep(wait_time)
+
+                    except ModelNotFoundError as e:
+                        # Misconfiguration, not a transient condition - surface it
+                        self.logger.error(f"System One model not found: {e.message}")
+                        raise
+
+                    except AuthenticationError as e:
+                        # Misconfiguration, not a transient condition - surface it
+                        self.logger.error(f"System One authentication failed: {e.message}")
+                        raise
+
+                    except MultiplexerError as e:
+                        # Anything else multiplexer-related (e.g. an invalid
+                        # response body) is not worth retrying across the pool
+                        self.logger.error(f"Multiplexer error during System One query: {e.message}")
+                        raise
+            finally:
+                self.concurrency_active_count -= 1
+
     async def __aenter__(self):
         """Async context manager entry."""
         await self._ensure_initialized()
@@ -342,3 +538,4 @@ class MultiplexerVLMClient(BaseVLMClient):
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
         await self._cleanup_multiplexer()
+        await self._cleanup_systemone_multiplexer()

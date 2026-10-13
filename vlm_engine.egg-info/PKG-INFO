@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: vlm_engine
-Version: 1.0.1
+Version: 1.1.0
 Summary: Advanced Vision-Language Model Engine for content tagging
 Home-page: https://github.com/Haven-hvn/haven-vlm-engine-package
 Author: HAVEN Network
@@ -23,7 +23,7 @@ Requires-Dist: pyyaml
 Requires-Dist: opencv-python
 Requires-Dist: decord
 Requires-Dist: requests
-Requires-Dist: multiplexer-llm==0.2.3
+Requires-Dist: multiplexer-llm==0.3.0
 Provides-Extra: gpu
 Requires-Dist: torch>=2.0.0; extra == "gpu"
 Requires-Dist: torchvision>=0.15.0; extra == "gpu"

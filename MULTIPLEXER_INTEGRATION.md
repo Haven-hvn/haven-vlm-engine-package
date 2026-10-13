@@ -16,7 +16,7 @@ The multiplexer integration allows you to:
 The multiplexer-llm package is automatically installed as a dependency:
 
 ```bash
-pip install vlm_engine  # Includes multiplexer-llm==0.2.3
+pip install vlm_engine  # Includes multiplexer-llm==0.3.0
 ```
 
 ## Configuration
@@ -164,6 +164,110 @@ INFO - Added fallback endpoint: backup-server (weight: 1)
 DEBUG - Request routed to: gpu-server-1
 DEBUG - Fallback triggered, using: backup-server
 ```
+
+## System One (Jev `/v1/systemone`) queries
+
+Alongside chat completions, the multiplexer integration speaks the standard
+**System One /v1/systemone wire contract** - one request carries a `state`
+plus a map of atomic questions (`noul` / `choice` / `score`) and the response
+answers each question by id.
+
+**Pools are one type or the other, never mixed.** VLM endpoints speak only
+`/chat/completions`; Jev endpoints speak only `/v1/systemone`. Each pool is
+therefore configured separately and routed through its own multiplexer
+instance - the same weighted selection, capacity reservation, and automatic
+failover as chat, with no cross-routing between endpoint types.
+
+### Configuration
+
+```python
+from vlm_engine.config_models import EngineConfig, ModelConfig
+
+config = EngineConfig(
+    active_ai_models=["vlm_model"],
+    models={
+        "vlm_model": ModelConfig(
+            type="vlm_model",
+            model_id="HuggingFaceTB/SmolVLM-Instruct",
+            use_multiplexer=True,
+            multiplexer_endpoints=[
+                {"base_url": "http://server1:7045/v1", "name": "primary-server-1", "weight": 5},
+                {"base_url": "http://server2:7045/v1", "name": "primary-server-2", "weight": 3},
+            ],
+            # Dedicated Jev pool - built lazily on first use
+            systemone_endpoints=[
+                {
+                    "base_url": "http://jev-server:8000/v1",  # /v1 prefix required
+                    "api_key": "",
+                    "name": "jev-primary",
+                    "weight": 5,
+                },
+                {
+                    "base_url": "http://jev-backup:8001/v1",
+                    "api_key": "",
+                    "name": "jev-backup",
+                    "weight": 1,
+                    "is_fallback": True,  # Used only when primaries fail
+                },
+            ],
+            tag_list=["action", "scene", "object"],
+        )
+    },
+)
+```
+
+Each entry in `systemone_endpoints` supports the same options as
+`multiplexer_endpoints`:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `base_url` | string | Yes | Jev endpoint URL, including the `/v1` prefix |
+| `api_key` | string | No | API key (use "" for unauthenticated) |
+| `name` | string | No | Friendly name for logging/stats |
+| `weight` | integer | No | Request distribution weight (default: 1) |
+| `is_fallback` | boolean | No | Use only when primaries fail (default: false) |
+| `max_concurrent` | integer | No | Per-endpoint concurrency slot limit (default: unlimited) |
+
+### Usage
+
+```python
+client = MultiplexerVLMClient(config)  # or obtain it from the engine
+
+result = await client.ask_systemone(
+    state="refund please",
+    questions={
+        "greeting": {"type": "noul", "instructions": "Is this a greeting?"},
+        "topic": {
+            "type": "choice",
+            "instructions": "Pick a category.",
+            "criteria": {"billing": "billing issue", "other": None},
+        },
+        "sentiment": {
+            "type": "score",
+            "instructions": "Rate the sentiment.",
+            "criteria": ["very negative", "negative", "neutral", "positive", "very positive"],
+        },
+    },
+)
+
+print(result["answers"]["greeting"]["noul"])   # 0.97
+print(result["answers"]["topic"]["choice"])    # "billing"
+print(result["usage"])                         # {"input_tokens": ..., "output_tokens": ...}
+```
+
+### Behavior
+
+- **Routing**: `state` + `questions` are POSTed to `{base_url}/systemone`; the
+  `model` field is overridden by the selected endpoint's registered `name`
+  (same convention as `chat.completions.create`).
+- **Failover**: 429/529 disable an endpoint for 60s and try the next; connection
+  errors and other 5xx disable for 15s; `401`/`422` propagate immediately.
+- **Errors are raised, not folded**: unlike `analyze_frame` (which returns
+  zero-confidence tags), `ask_systemone` raises once all endpoints are
+  exhausted, or immediately for misconfiguration (`ValueError` when
+  `systemone_endpoints` is missing). Your code owns the fallback policy.
+- **Admission control**: queries share the client's global semaphore with
+  `analyze_frame`, so both surfaces together cannot overload the host.
 
 ## Migration Guide
 
